@@ -1,0 +1,38 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment variables
+.env
+.env.*
+!.env.example
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Project-generated data and artifacts
+raw_dataset/
+clean_dataset/
+split_dataset/
+saved_models/
+results/
+
+# Model and binary artifacts
+*.joblib
+*.pkl
+*.h5
+*.pt
+*.pth
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
