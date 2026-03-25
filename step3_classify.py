@@ -201,13 +201,12 @@ def build_tuned_classifier(objective, class_names):
 
 
 def apply_smote(X_train, y_train, objective):
-    """Apply SMOTE to oversample minority classes."""
     try:
         from imblearn.over_sampling import SMOTE
         unique, counts = np.unique(y_train, return_counts=True)
         print(f"\n  Class distribution before SMOTE:")
         for cls, cnt in zip(unique, counts):
-            print(f"    {cls:20s}: {cnt}")
+            print(f"    {str(cls):20s}: {cnt}")   # ← fix here
 
         sm = SMOTE(random_state=42, k_neighbors=min(5, counts.min()-1))
         X_res, y_res = sm.fit_resample(X_train, y_train)
@@ -215,7 +214,7 @@ def apply_smote(X_train, y_train, objective):
         unique2, counts2 = np.unique(y_res, return_counts=True)
         print(f"\n  Class distribution after SMOTE:")
         for cls, cnt in zip(unique2, counts2):
-            print(f"    {cls:20s}: {cnt}")
+            print(f"    {str(cls):20s}: {cnt}")   # ← fix here
 
         return X_res, y_res
     except ImportError:
