@@ -190,19 +190,42 @@ def print_progress_summary(step_name: str) -> None:
         for objective, score in accs.items():
             print(f"  {objective:14s}: {score * 100:.2f}%")
 
+DISASTER_CLASSES = ["earthquake", "flood", "hurricane", "wildfire", "landslide", "not_disaster"]
+SAVE_DIR = npath("raw_dataset")
+
+
+def is_image_file(name: str) -> bool:
+    return name.lower().endswith((".jpg", ".jpeg", ".png"))
+def dataset_counts() -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for cls_name in DISASTER_CLASSES:
+        class_dir = npath(SAVE_DIR, cls_name)
+        count = 0
+        if os.path.isdir(class_dir):
+            try:
+                for name in os.listdir(class_dir):
+                    if is_image_file(name):
+                        count += 1
+            except OSError as exc:
+                print(f"[WARN] Could not list '{class_dir}': {exc}")
+        counts[cls_name] = count
+    return counts
 
 def main() -> int:
     print("=" * 80)
     print("DISASTERRES-NET PIPELINE RUNNER")
     print("=" * 80)
+    final_counts = dataset_counts()
+    print("Final dataset counts:")
+    for cls_name, count in final_counts.items():
+        print(f"  {cls_name:14s}: {count}")
+    # if not run_step("step1_collect_data.py"):
+    #     return 1
+    # print_progress_summary("STEP 1")
 
-    if not run_step("step1_collect_data.py"):
-        return 1
-    print_progress_summary("STEP 1")
-
-    if not run_step("step2_preprocess.py"):
-        return 1
-    print_progress_summary("STEP 2")
+    # if not run_step("step2_preprocess.py"):
+    #     return 1
+    # print_progress_summary("STEP 2")
 
     ok, issues = validate_before_step3()
     if not ok:

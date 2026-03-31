@@ -36,3 +36,16 @@ results/
 *.log
 *.tmp
 *.temp
+
+
+
+#images
+*.png
+*.jpg
+*.jpeg
+*.avif
+
+*.png:Zone.Identifier
+*.jpg:Zone.Identifier
+*.jpeg:Zone.Identifier
+*.avif:Zone.Identifier
