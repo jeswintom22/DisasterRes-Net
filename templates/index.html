@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DisasterRes-Net | AI Insights</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+    <header>
+        <h1>DisasterRes-Net</h1>
+        <p class="subtitle">Deep Learning Triage & Spatial Explanations</p>
+    </header>
+
+    <main class="container">
+        <section class="glass-panel upload-section" id="uploadPanel">
+            <div class="drop-zone" id="dropZone">
+                <i class="fa-solid fa-satellite"></i>
+                <h2>Drag & Drop Surveillance Imagery</h2>
+                <p>or click to browse local files</p>
+                <input type="file" id="fileInput" class="hidden-input" accept="image/*">
+            </div>
+
+            <div class="image-preview-container" id="previewContainer">
+                <img id="imagePreview" class="image-preview" src="" alt="Preview">
+            </div>
+
+            <button class="btn" id="analyzeBtn" disabled>
+                <i class="fa-solid fa-layer-group"></i> Extract Insights
+            </button>
+            <div class="loader" id="loader">Computing Grad-CAM via InceptionResNetV2...</div>
+        </section>
+
+        <section class="results-section" id="resultsSection" style="display: none; opacity: 0;">
+            <div class="action-bar" style="text-align: right; margin-bottom: 1rem;">
+                <button class="btn secondary" id="resetBtn">Analyze New Image</button>
+            </div>
+            <div class="grid-layout">
+                <!-- Disaster Type Card -->
+                <div class="glass-panel result-card">
+                    <div class="details">
+                        <span class="label-title">Disaster Classification</span>
+                        <span class="prediction" id="typePred">Analyzing...</span>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" id="typeConfBar"></div>
+                        </div>
+                        <span id="typeConfText" style="opacity: 0.7; font-size: 0.9rem;">--% Confidence</span>
+                    </div>
+                    <div class="heatmap-viewer">
+                        <img id="typeHeatmap" class="heatmap-img" src="" alt="Grad-CAM Heatmap">
+                        <div class="overlay-tag"
+                            style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem;">
+                            Grad-CAM Response</div>
+                    </div>
+                </div>
+
+                <!-- Damage Card -->
+                <div class="glass-panel result-card">
+                    <div class="details">
+                        <span class="label-title">Damage Assessment</span>
+                        <span class="prediction" id="damagePred">Analyzing...</span>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" id="damageConfBar"></div>
+                        </div>
+                        <span id="damageConfText" style="opacity: 0.7; font-size: 0.9rem;">--% Confidence</span>
+                    </div>
+                    <div class="heatmap-viewer">
+                        <img id="damageHeatmap" class="heatmap-img" src="" alt="Grad-CAM Heatmap">
+                        <div class="overlay-tag"
+                            style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem;">
+                            Grad-CAM Response</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const imagePreview = document.getElementById('imagePreview');
+        const previewContainer = document.getElementById('previewContainer');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        const loader = document.getElementById('loader');
+        const resultsSection = document.getElementById('resultsSection');
+        const resetBtn = document.getElementById('resetBtn');
+        const uploadPanel = document.getElementById('uploadPanel');
+
+        let selectedFile = null;
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
+            dropZone.addEventListener(evt, e => e.preventDefault(), false);
+        });
+
+        dropZone.addEventListener('dragover', () => dropZone.classList.add('dragover'));
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => {
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+        });
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => { if (e.target.files.length) handleFile(e.target.files[0]); });
+
+        function handleFile(file) {
+            if (!file.type.startsWith('image/')) return;
+            selectedFile = file;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                imagePreview.src = e.target.result;
+                previewContainer.style.display = 'block';
+                dropZone.style.display = 'none';
+                analyzeBtn.disabled = false;
+
+                // Trigger 3D float animation entrance
+                setTimeout(() => {
+                    previewContainer.style.opacity = '1';
+                    previewContainer.style.transform = 'perspective(1000px) rotateY(-5deg) rotateX(5deg)';
+                }, 50);
+            };
+            reader.readAsDataURL(file);
+        }
+
+        analyzeBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+            analyzeBtn.style.display = 'none';
+            loader.style.display = 'block';
+
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+
+            try {
+                const response = await fetch('/api/predict', { method: 'POST', body: formData });
+                if (!response.ok) throw new Error('API Error');
+                const data = await response.json();
+
+                if (data.disaster_type && !data.disaster_type.error) {
+                    document.getElementById('typePred').textContent = data.disaster_type.prediction.replace(/_/g, ' ');
+                    document.getElementById('typeConfBar').style.width = data.disaster_type.confidence + '%';
+                    document.getElementById('typeConfText').textContent = data.disaster_type.confidence + '% Confidence';
+                    document.getElementById('typeHeatmap').src = data.disaster_type.heatmap;
+                }
+
+                if (data.damage && !data.damage.error) {
+                    document.getElementById('damagePred').textContent = data.damage.prediction.replace(/_/g, ' ');
+                    document.getElementById('damageConfBar').style.width = data.damage.confidence + '%';
+                    document.getElementById('damageConfText').textContent = data.damage.confidence + '% Confidence';
+                    document.getElementById('damageHeatmap').src = data.damage.heatmap;
+                }
+
+                uploadPanel.style.display = 'none';
+                resultsSection.style.display = 'block';
+                setTimeout(() => resultsSection.style.opacity = '1', 50);
+
+            } catch (error) {
+                alert('Prediction failed. Ensure models are trained and API is connected.');
+            } finally {
+                analyzeBtn.style.display = 'inline-block';
+                loader.style.display = 'none';
+            }
+        });
+
+        resetBtn.addEventListener('click', () => {
+            resultsSection.style.opacity = '0';
+            setTimeout(() => {
+                resultsSection.style.display = 'none';
+                uploadPanel.style.display = 'flex';
+                fileInput.value = '';
+                selectedFile = null;
+                imagePreview.src = '';
+                previewContainer.style.display = 'none';
+                dropZone.style.display = 'block';
+                analyzeBtn.disabled = true;
+            }, 400);
+        });
+    </script>
+</body>
+
+</html>
