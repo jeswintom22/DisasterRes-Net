@@ -7,6 +7,8 @@ __pycache__/
 .venv/
 venv/
 env/
+disaster_Net/
+
 
 # Local environment variables
 .env
@@ -24,6 +26,7 @@ clean_dataset/
 split_dataset/
 saved_models/
 results/
+mlruns/
 
 # Model and binary artifacts
 *.joblib

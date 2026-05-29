@@ -196,13 +196,13 @@ def main() -> int:
     print("DISASTERRES-NET PIPELINE RUNNER")
     print("=" * 80)
 
-    if not run_step("step1_collect_data.py"):
-        return 1
-    print_progress_summary("STEP 1")
+    # if not run_step("step1_collect_data.py"):
+    #     return 1
+    # print_progress_summary("STEP 1")
 
-    if not run_step("step2_preprocess.py"):
-        return 1
-    print_progress_summary("STEP 2")
+    # if not run_step("step2_preprocess.py"):
+    #     return 1
+    # print_progress_summary("STEP 2")
 
     ok, issues = validate_before_step3()
     if not ok:

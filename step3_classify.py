@@ -6,6 +6,8 @@ import warnings
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import joblib
+import mlflow
+import mlflow.sklearn
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 from sklearn.ensemble import RandomForestClassifier
@@ -18,7 +20,7 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from skimage.feature import graycomatrix, graycoprops
 from tqdm import tqdm
 
@@ -31,6 +33,17 @@ except Exception as exc:
     print(f"[WARN] matplotlib import failed: {exc}. Confusion image generation will be disabled.")
 
 try:
+    import tensorflow as tf
+
+    # --- GPU / CUDA setup ---
+    _gpus = tf.config.list_physical_devices("GPU")
+    if _gpus:
+        for _g in _gpus:
+            tf.config.experimental.set_memory_growth(_g, True)
+        print(f"[INFO] CUDA GPU detected: {_gpus[0].name}")
+    else:
+        print("[WARN] No GPU found — running on CPU (slower).")
+
     from tensorflow.keras.applications import InceptionResNetV2
     from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input
     from tensorflow.keras.models import Model
@@ -50,7 +63,7 @@ SPLIT_DIR = npath("split_dataset")
 MODEL_DIR = npath("saved_models")
 RESULT_DIR = npath("results")
 IMG_SIZE = (299, 299)
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 
 OBJECTIVES = ("informativeness", "damage")
 IMG_EXTS = (".jpg", ".jpeg", ".png")
@@ -95,8 +108,11 @@ def build_feature_extractor() -> Optional[object]:
     if InceptionResNetV2 is None or preprocess_input is None or Model is None:
         return None
     try:
-        base = InceptionResNetV2(weights="imagenet", include_top=True, input_shape=(299, 299, 3))
-        model = Model(inputs=base.input, outputs=base.get_layer("predictions").output)
+        base = InceptionResNetV2(
+            weights="imagenet", include_top=False, pooling="avg",
+            input_shape=(299, 299, 3),
+        )
+        model = Model(inputs=base.input, outputs=base.output)
         model.trainable = False
         return model
     except Exception as exc:
@@ -281,64 +297,104 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
     glcm_train = extract_all_glcm(train_paths)
     glcm_test = extract_all_glcm(test_paths)
 
-    if deep_train.shape[1] != 1000:
-        print(f"[WARN] Deep feature dim is {deep_train.shape[1]}, expected 1000.")
+    if deep_train.shape[1] != 1536:
+        print(f"[WARN] Deep feature dim is {deep_train.shape[1]}, expected 1536.")
     if glcm_train.shape[1] != 20:
         print(f"[WARN] GLCM feature dim is {glcm_train.shape[1]}, expected 20.")
 
     x_train = np.hstack([deep_train, glcm_train])
     x_test = np.hstack([deep_test, glcm_test])
-    print(f"[INFO] Fused feature shape train: {x_train.shape}")
-    print(f"[INFO] Fused feature shape test : {x_test.shape}")
 
-    clf = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
-    try:
-        clf.fit(x_train, y_train)
-    except Exception as exc:
-        print(f"[ERROR] RandomForest training failed: {exc}")
-        return None
+    scaler = StandardScaler()
+    x_train = scaler.fit_transform(x_train)
+    x_test = scaler.transform(x_test)
+    print(f"[INFO] Fused feature shape train: {x_train.shape} (normalized)")
+    print(f"[INFO] Fused feature shape test : {x_test.shape} (normalized)")
 
-    y_pred = clf.predict(x_test)
-    acc = float(accuracy_score(y_test, y_pred))
-    precision = float(precision_score(y_test, y_pred, average="weighted", zero_division=0))
-    recall = float(recall_score(y_test, y_pred, average="weighted", zero_division=0))
-    f1 = float(f1_score(y_test, y_pred, average="weighted", zero_division=0))
-    cm = confusion_matrix(y_test, y_pred)
-
-    print(f"[RESULT] accuracy={acc:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}")
-    print("[REPORT]")
-    print(classification_report(y_test, y_pred, target_names=le.classes_, zero_division=0))
-
-    cm_path = _save_confusion_plot(cm, le.classes_, objective)
-
-    model_path = npath(MODEL_DIR, f"rf_{objective}.joblib")
-    encoder_path = npath(MODEL_DIR, f"le_{objective}.joblib")
-    try:
-        joblib.dump(clf, model_path)
-        joblib.dump(le, encoder_path)
-    except OSError as exc:
-        print(f"[ERROR] Failed saving model artifacts: {exc}")
-        return None
-
-    metrics = {
-        "objective": objective,
-        "accuracy": acc,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "train_images": float(len(train_paths)),
-        "test_images": float(len(test_paths)),
-        "feature_dim": float(x_train.shape[1]),
-    }
-    metrics_path = _save_metrics_json(objective, metrics)
-
-    print(f"[INFO] Model saved: {model_path}")
-    print(f"[INFO] Label encoder saved: {encoder_path}")
-    if cm_path:
-        print(f"[INFO] Confusion matrix saved: {cm_path}")
-    print(f"[INFO] Metrics saved: {metrics_path}")
-
-    return metrics
+    mlflow.set_experiment("DisasterRes-Net")
+    with mlflow.start_run(run_name=f"rf_{objective}"):
+        clf = RandomForestClassifier(
+            n_estimators=300,
+            class_weight="balanced",
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42,
+            n_jobs=-1,
+        )
+        try:
+            clf.fit(x_train, y_train)
+        except Exception as exc:
+            print(f"[ERROR] RandomForest training failed: {exc}")
+            return None
+    
+        y_pred = clf.predict(x_test)
+        acc = float(accuracy_score(y_test, y_pred))
+        precision = float(precision_score(y_test, y_pred, average="weighted", zero_division=0))
+        recall = float(recall_score(y_test, y_pred, average="weighted", zero_division=0))
+        f1 = float(f1_score(y_test, y_pred, average="weighted", zero_division=0))
+        cm = confusion_matrix(y_test, y_pred)
+    
+        print(f"[RESULT] accuracy={acc:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}")
+        print("[REPORT]")
+        print(classification_report(y_test, y_pred, target_names=le.classes_, zero_division=0))
+    
+        cm_path = _save_confusion_plot(cm, le.classes_, objective)
+    
+        model_path = npath(MODEL_DIR, f"rf_{objective}.joblib")
+        encoder_path = npath(MODEL_DIR, f"le_{objective}.joblib")
+        scaler_path = npath(MODEL_DIR, f"scaler_{objective}.joblib")
+        try:
+            joblib.dump(clf, model_path)
+            joblib.dump(le, encoder_path)
+            joblib.dump(scaler, scaler_path)
+        except OSError as exc:
+            print(f"[ERROR] Failed saving model artifacts: {exc}")
+            return None
+    
+        metrics = {
+            "objective": objective,
+            "accuracy": acc,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "train_images": float(len(train_paths)),
+            "test_images": float(len(test_paths)),
+            "feature_dim": float(x_train.shape[1]),
+        }
+        metrics_path = _save_metrics_json(objective, metrics)
+        
+        mlflow.log_param("objective", objective)
+        mlflow.log_params({
+            "n_estimators": 300,
+            "class_weight": "balanced",
+            "min_samples_split": 5,
+            "min_samples_leaf": 2,
+            "random_state": 42
+        })
+        mlflow.log_metrics({
+            "accuracy": acc,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "train_images": float(len(train_paths)),
+            "test_images": float(len(test_paths)),
+            "feature_dim": float(x_train.shape[1])
+        })
+        mlflow.sklearn.log_model(clf, f"rf_model_{objective}")
+        mlflow.log_artifact(encoder_path)
+        mlflow.log_artifact(scaler_path)
+        if cm_path:
+            mlflow.log_artifact(cm_path)
+        mlflow.log_artifact(metrics_path)
+    
+        print(f"[INFO] Model saved: {model_path}")
+        print(f"[INFO] Label encoder saved: {encoder_path}")
+        print(f"[INFO] Scaler saved: {scaler_path}")
+        if cm_path:
+            print(f"[INFO] Confusion matrix saved: {cm_path}")
+        print(f"[INFO] Metrics saved: {metrics_path}")
+    
+        return metrics
 
 
 def main() -> int:
