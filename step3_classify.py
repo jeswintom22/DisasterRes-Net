@@ -1,92 +1,213 @@
-"""
-Step 3 — End-to-End PyTorch Deep Learning Classification.
-Backend: PyTorch + timm (InceptionResNetV2).
-This script directly fine-tunes the CNN for disaster type and damage level.
-"""
-from __future__ import annotations
+"""Step 3: extract features, train Random Forest, evaluate, and save models."""
 
 import json
 import os
 import warnings
-from typing import Dict, List, Optional, Tuple, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import joblib
+import mlflow
+import mlflow.sklearn
 import numpy as np
 from PIL import Image, UnidentifiedImageError
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
-    ConfusionMatrixDisplay, accuracy_score, classification_report,
-    confusion_matrix, f1_score, precision_score, recall_score
+    ConfusionMatrixDisplay,
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    precision_score,
+    recall_score,
 )
-from sklearn.preprocessing import LabelEncoder
-from sklearn.utils.class_weight import compute_class_weight
-
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-import timm
-from torchvision import transforms as T
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from skimage.feature import graycomatrix, graycoprops
+from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 
 try:
-    import matplotlib
-    matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    _PLT = True
-except Exception as _e:
+except Exception as exc:
     plt = None
-    _PLT = False
+    print(f"[WARN] matplotlib import failed: {exc}. Confusion image generation will be disabled.")
 
-_DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-if torch.cuda.is_available():
-    _gpu_name = torch.cuda.get_device_name(0)
-    _vram_gb  = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
-    print(f"[INFO] CUDA GPU : {_gpu_name}  ({_vram_gb:.1f} GB VRAM)")
-else:
-    print("[WARN] No CUDA GPU — running on CPU. Training will be slow.")
+try:
+    import tensorflow as tf
+
+    # --- GPU / CUDA setup ---
+    _gpus = tf.config.list_physical_devices("GPU")
+    if _gpus:
+        for _g in _gpus:
+            tf.config.experimental.set_memory_growth(_g, True)
+        print(f"[INFO] CUDA GPU detected: {_gpus[0].name}")
+    else:
+        print("[WARN] No GPU found — running on CPU (slower).")
+
+    from tensorflow.keras.applications import InceptionResNetV2
+    from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input
+    from tensorflow.keras.models import Model
+except Exception as exc:
+    InceptionResNetV2 = None
+    preprocess_input = None
+    Model = None
+    print(f"[ERROR] TensorFlow import failed: {exc}")
+    print("[ERROR] Install TensorFlow for Python 3.10 (Windows), then retry.")
+
 
 def npath(*parts: str) -> str:
     return os.path.normpath(os.path.join(*parts))
 
-SPLIT_DIR  = npath("split_dataset")
-MODEL_DIR  = npath("saved_models")
+
+SPLIT_DIR = npath("split_dataset")
+MODEL_DIR = npath("saved_models")
 RESULT_DIR = npath("results")
+IMG_SIZE = (299, 299)
+BATCH_SIZE = 64
 
-IMG_SIZE   = (299, 299)
-BATCH_SIZE = 32  # Reduced for training backprop
-EPOCHS     = 10
-NUM_WORKERS = min(4, os.cpu_count() or 1)
+OBJECTIVES = ("informativeness", "damage")
+IMG_EXTS = (".jpg", ".jpeg", ".png")
 
-OBJECTIVES = ("disaster_type", "damage")
-IMG_EXTS   = (".jpg", ".jpeg", ".png")
-
-os.makedirs(MODEL_DIR,  exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(RESULT_DIR, exist_ok=True)
 
-DISASTER_TYPE_FOLDERS = {
-    "earthquake", "flood", "hurricane",
-    "wildfire", "landslide", "not_disaster",
+
+DEFAULT_LABEL_MAPS = {
+    "informativeness": {
+        "earthquake": "informative",
+        "flood": "informative",
+        "hurricane": "informative",
+        "wildfire": "informative",
+        "landslide": "informative",
+        "not_disaster": "not_informative",
+    },
+    "damage": {
+        "earthquake": "severe",
+        "hurricane": "severe",
+        "flood": "mild",
+        "wildfire": "mild",
+        "landslide": "little_or_none",
+        "not_disaster": "little_or_none",
+    },
 }
 
-DAMAGE_LABEL_MAP: Dict[str, str] = {
-    "earthquake":   "severe",
-    "hurricane":    "severe",
-    "landslide":    "severe",
-    "flood":        "mild",
-    "wildfire":     "mild",
-    "not_disaster": "little_or_none",
-}
 
 def _safe_listdir(path: str) -> List[str]:
     try:
         return os.listdir(path)
     except OSError as exc:
-        print(f"[ERROR] Cannot list '{path}': {exc}")
+        print(f"[ERROR] Could not list directory '{path}': {exc}")
         return []
+
 
 def _is_image(name: str) -> bool:
     return name.lower().endswith(IMG_EXTS)
+
+
+def build_feature_extractor() -> Optional[object]:
+    if InceptionResNetV2 is None or preprocess_input is None or Model is None:
+        return None
+    try:
+        base = InceptionResNetV2(
+            weights="imagenet", include_top=False, pooling="avg",
+            input_shape=(299, 299, 3),
+        )
+        model = Model(inputs=base.input, outputs=base.output)
+        model.trainable = False
+        return model
+    except Exception as exc:
+        print(f"[ERROR] Failed to build InceptionResNetV2 extractor: {exc}")
+        return None
+
+
+def _load_rgb_299(path: str) -> Optional[np.ndarray]:
+    try:
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            img = img.resize(IMG_SIZE, Image.Resampling.LANCZOS)
+            return np.asarray(img, dtype=np.float32)
+    except UnidentifiedImageError as exc:
+        print(f"[WARN] Corrupt image skipped: '{path}'. Reason: {exc}")
+        return None
+    except OSError as exc:
+        print(f"[WARN] Could not read image '{path}': {exc}")
+        return None
+
+
+def extract_deep_features(model: object, image_paths: Sequence[str], batch_size: int = BATCH_SIZE) -> np.ndarray:
+    features: List[np.ndarray] = []
+    fallback_count = 0
+    for start in tqdm(range(0, len(image_paths), batch_size), desc="  Deep features"):
+        batch_paths = image_paths[start : start + batch_size]
+        batch_imgs: List[np.ndarray] = []
+        for pth in batch_paths:
+            arr = _load_rgb_299(pth)
+            if arr is None:
+                arr = np.zeros((299, 299, 3), dtype=np.float32)
+                fallback_count += 1
+            batch_imgs.append(arr)
+        batch_array = np.asarray(batch_imgs, dtype=np.float32)
+        batch_array = preprocess_input(batch_array)
+        try:
+            preds = model.predict(batch_array, verbose=0)
+        except Exception as exc:
+            print(f"[ERROR] Deep feature extraction failed for batch starting at {start}: {exc}")
+            preds = np.zeros((len(batch_paths), 1000), dtype=np.float32)
+        features.extend(preds)
+
+    if fallback_count:
+        print(f"[WARN] Deep features used blank fallback for {fallback_count} unreadable images.")
+    return np.asarray(features, dtype=np.float32)
+
+
+def extract_glcm_features(image_path: str) -> np.ndarray:
+    try:
+        with Image.open(image_path) as img:
+            img = img.convert("L")
+            img = img.resize(IMG_SIZE, Image.Resampling.LANCZOS)
+            arr = np.asarray(img)
+    except UnidentifiedImageError as exc:
+        print(f"[WARN] Corrupt image skipped in GLCM: '{image_path}'. Reason: {exc}")
+        return np.zeros(20, dtype=np.float32)
+    except OSError as exc:
+        print(f"[WARN] Could not read image for GLCM '{image_path}': {exc}")
+        return np.zeros(20, dtype=np.float32)
+
+    arr = (arr / 32).astype(np.uint8)
+    arr = np.clip(arr, 0, 7)
+    angles = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
+    out: List[float] = []
+
+    for angle in angles:
+        glcm = graycomatrix(arr, distances=[1], angles=[angle], levels=8, symmetric=True, normed=True)
+        out.append(float(graycoprops(glcm, "contrast")[0, 0]))
+        out.append(float(graycoprops(glcm, "correlation")[0, 0]))
+        out.append(float(graycoprops(glcm, "energy")[0, 0]))
+        out.append(float(graycoprops(glcm, "homogeneity")[0, 0]))
+        pmat = glcm[:, :, 0, 0]
+        p_safe = np.where(pmat > 0, pmat, 1e-10)
+        out.append(float(-np.sum(pmat * np.log2(p_safe))))
+
+    return np.asarray(out, dtype=np.float32)
+
+
+def extract_all_glcm(image_paths: Sequence[str]) -> np.ndarray:
+    feats: List[np.ndarray] = []
+    for pth in tqdm(image_paths, desc="  GLCM features"):
+        feats.append(extract_glcm_features(pth))
+    return np.asarray(feats, dtype=np.float32)
+
+
+def _infer_label_map(objective: str, split_dir: str) -> Dict[str, str]:
+    folder_names = [d for d in _safe_listdir(split_dir) if os.path.isdir(npath(split_dir, d))]
+    lower = {d.lower() for d in folder_names}
+
+    if objective == "informativeness" and {"informative", "not_informative"}.issubset(lower):
+        return {name: name.lower() for name in folder_names}
+    if objective == "damage" and {"severe", "mild", "little_or_none"}.issubset(lower):
+        return {name: name.lower() for name in folder_names}
+    return DEFAULT_LABEL_MAPS[objective]
+
 
 def load_split(split: str, objective: str) -> Tuple[List[str], List[str]]:
     split_dir = npath(SPLIT_DIR, split)
@@ -94,266 +215,196 @@ def load_split(split: str, objective: str) -> Tuple[List[str], List[str]]:
         print(f"[ERROR] Split folder not found: {split_dir}")
         return [], []
 
-    paths: List[str]  = []
+    label_map = _infer_label_map(objective, split_dir)
+    paths: List[str] = []
     labels: List[str] = []
 
     for folder in sorted(_safe_listdir(split_dir)):
-        folder_dir   = npath(split_dir, folder)
-        folder_lower = folder.lower()
+        folder_dir = npath(split_dir, folder)
         if not os.path.isdir(folder_dir):
             continue
 
-        if objective == "disaster_type":
-            if folder_lower not in DISASTER_TYPE_FOLDERS:
-                continue
-            label = folder_lower
-        elif objective == "damage":
-            label = DAMAGE_LABEL_MAP.get(folder_lower)
-            if label is None:
-                continue
-        else:
-            return [], []
+        mapped = label_map.get(folder)
+        if mapped is None:
+            mapped = label_map.get(folder.lower())
+        if mapped is None:
+            print(f"[WARN] Folder '{folder}' not mapped for objective '{objective}', skipping.")
+            continue
 
         for fname in _safe_listdir(folder_dir):
             if _is_image(fname):
                 paths.append(npath(folder_dir, fname))
-                labels.append(label)
+                labels.append(mapped)
 
-    print(f"[INFO] {split:5s} | {objective:15s} | {len(paths)} images")
     return paths, labels
 
-class DisasterDataset(Dataset):
-    def __init__(self, image_paths: List[str], labels: List[int], transform=None):
-        self.image_paths = image_paths
-        self.labels = labels
-        self.transform = transform
 
-    def __len__(self):
-        return len(self.image_paths)
+def _save_metrics_json(objective: str, metrics: Dict[str, float]) -> str:
+    out_path = npath(RESULT_DIR, f"metrics_{objective}.json")
+    try:
+        with open(out_path, "w", encoding="utf-8") as fobj:
+            json.dump(metrics, fobj, indent=2)
+    except OSError as exc:
+        print(f"[WARN] Could not write metrics json '{out_path}': {exc}")
+    return out_path
 
-    def __getitem__(self, idx):
-        path = self.image_paths[idx]
-        label = self.labels[idx]
-        try:
-            img = Image.open(path).convert("RGB")
-        except Exception:
-            # Fallback to a black image if corrupted
-            img = Image.new("RGB", IMG_SIZE, (0, 0, 0))
 
-        if self.transform is not None:
-            img = self.transform(img)
+def _save_confusion_plot(cm: np.ndarray, labels: Sequence[str], objective: str) -> Optional[str]:
+    if plt is None:
+        return None
+    out_path = npath(RESULT_DIR, f"confusion_matrix_{objective}.png")
+    try:
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
+        fig, ax = plt.subplots(figsize=(7, 6))
+        disp.plot(ax=ax, colorbar=False, cmap="Blues")
+        ax.set_title(f"Confusion Matrix - {objective}")
+        plt.tight_layout()
+        plt.savefig(out_path, dpi=150)
+        plt.close(fig)
+        return out_path
+    except OSError as exc:
+        print(f"[WARN] Could not save confusion matrix image '{out_path}': {exc}")
+        return None
 
-        return img, label
 
-def get_transforms(is_train: bool):
-    if is_train:
-        return T.Compose([
-            T.RandomResizedCrop(IMG_SIZE, scale=(0.8, 1.0)),
-            T.RandomHorizontalFlip(),
-            T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-            T.ToTensor(),
-            T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-        ])
-    else:
-        return T.Compose([
-            T.Resize(IMG_SIZE, interpolation=T.InterpolationMode.LANCZOS),
-            T.ToTensor(),
-            T.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-        ])
+def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
+    if objective not in OBJECTIVES:
+        print(f"[ERROR] Unknown objective '{objective}'. Valid: {OBJECTIVES}")
+        return None
 
-def get_class_weights(y: np.ndarray, num_classes: int) -> torch.FloatTensor:
-    classes = np.arange(num_classes)
-    w = compute_class_weight("balanced", classes=classes, y=y)
-    return torch.FloatTensor(w).to(_DEVICE)
+    print("\n" + "=" * 70)
+    print(f"STEP 3 - Objective: {objective}")
+    print("=" * 70)
 
-def build_model(num_classes: int) -> nn.Module:
-    model = timm.create_model("inception_resnet_v2", pretrained=True, num_classes=num_classes)
-    return model.to(_DEVICE)
-
-def train_epoch(model, dataloader, criterion, optimizer, scaler) -> float:
-    model.train()
-    total_loss = 0.0
-
-    for inputs, targets in dataloader:
-        inputs, targets = inputs.to(_DEVICE), targets.to(_DEVICE)
-
-        optimizer.zero_grad(set_to_none=True)
-        # Mixed precision training
-        with torch.amp.autocast(_DEVICE.type):
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-
-        total_loss += loss.item() * inputs.size(0)
-
-    return total_loss / len(dataloader.dataset)
-
-def evaluate(model, dataloader) -> Tuple[float, np.ndarray, np.ndarray]:
-    model.eval()
-    all_preds, all_targets = [], []
-
-    with torch.no_grad():
-        for inputs, targets in dataloader:
-            inputs = inputs.to(_DEVICE)
-            with torch.amp.autocast(_DEVICE.type):
-                outputs = model(inputs)
-            preds = torch.argmax(outputs, dim=1).cpu().numpy()
-            all_preds.extend(preds)
-            all_targets.extend(targets.numpy())
-
-    return np.array(all_preds), np.array(all_targets)
-
-def train_and_evaluate(objective: str) -> Optional[Dict]:
-    print("\n" + "=" * 72)
-    print(f"  OBJECTIVE : {objective}")
-    print("=" * 72)
+    extractor = build_feature_extractor()
+    if extractor is None:
+        print("[ERROR] Feature extractor unavailable. Install TensorFlow and retry.")
+        return None
 
     train_paths, train_labels = load_split("train", objective)
-    test_paths,  test_labels  = load_split("test",  objective)
+    test_paths, test_labels = load_split("test", objective)
+
     if not train_paths or not test_paths:
-        print("[ERROR] Empty split — run preprocessing first.")
+        print("[ERROR] Missing train/test image paths. Run step2_preprocess.py first.")
         return None
 
     le = LabelEncoder()
-    le.fit(train_labels + test_labels)
-    y_train = le.transform(train_labels)
-    y_test  = le.transform(test_labels)
-    num_classes = len(le.classes_)
-    print(f"[INFO] Classes : {list(le.classes_)}")
+    y_train = le.fit_transform(train_labels)
+    y_test = le.transform(test_labels)
 
-    train_ds = DisasterDataset(train_paths, y_train, get_transforms(is_train=True))
-    test_ds  = DisasterDataset(test_paths,  y_test,  get_transforms(is_train=False))
+    deep_train = extract_deep_features(extractor, train_paths)
+    deep_test = extract_deep_features(extractor, test_paths)
+    glcm_train = extract_all_glcm(train_paths)
+    glcm_test = extract_all_glcm(test_paths)
 
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,  num_workers=NUM_WORKERS, pin_memory=True)
-    test_loader  = DataLoader(test_ds,  batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
+    if deep_train.shape[1] != 1536:
+        print(f"[WARN] Deep feature dim is {deep_train.shape[1]}, expected 1536.")
+    if glcm_train.shape[1] != 20:
+        print(f"[WARN] GLCM feature dim is {glcm_train.shape[1]}, expected 20.")
 
-    class_weights = get_class_weights(y_train, num_classes)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    x_train = np.hstack([deep_train, glcm_train])
+    x_test = np.hstack([deep_test, glcm_test])
+
+    scaler = StandardScaler()
+    x_train = scaler.fit_transform(x_train)
+    x_test = scaler.transform(x_test)
+    print(f"[INFO] Fused feature shape train: {x_train.shape} (normalized)")
+    print(f"[INFO] Fused feature shape test : {x_test.shape} (normalized)")
+
+    mlflow.set_experiment("DisasterRes-Net")
+    with mlflow.start_run(run_name=f"rf_{objective}"):
+        clf = RandomForestClassifier(
+            n_estimators=300,
+            class_weight="balanced",
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42,
+            n_jobs=-1,
+        )
+        try:
+            clf.fit(x_train, y_train)
+        except Exception as exc:
+            print(f"[ERROR] RandomForest training failed: {exc}")
+            return None
     
-    model = build_model(num_classes)
-    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=2)
-    scaler = torch.amp.GradScaler(_DEVICE.type)
-
-    best_f1 = 0.0
-    model_save_path = npath(MODEL_DIR, f"model_{objective}.pth")
-    le_save_path = npath(MODEL_DIR, f"le_{objective}.joblib")
-
-    print(f"\n[TRAIN] Beginning fine-tuning for {EPOCHS} epochs...")
-    for epoch in range(1, EPOCHS + 1):
-        loss = train_epoch(model, train_loader, criterion, optimizer, scaler)
-        preds, targets = evaluate(model, test_loader)
-        
-        val_f1 = float(f1_score(targets, preds, average="weighted", zero_division=0))
-        val_acc = float(accuracy_score(targets, preds))
-        
-        print(f"  Epoch {epoch:02d}/{EPOCHS} | Train Loss: {loss:.4f} | Val Acc: {val_acc:.4f} | Val F1: {val_f1:.4f}")
-        
-        scheduler.step(val_f1)
-        
-        if val_f1 > best_f1:
-            best_f1 = val_f1
-            torch.save(model.state_dict(), model_save_path)
-            print(f"  --> Saved new best model! (F1: {best_f1:.4f})")
-
-    print("\n[EVAL] Final evaluation with best model...")
-    model.load_state_dict(torch.load(model_save_path, map_location=_DEVICE, weights_only=True))
-    preds, targets = evaluate(model, test_loader)
-
-    acc       = float(accuracy_score(targets, preds))
-    precision = float(precision_score(targets, preds, average="weighted", zero_division=0))
-    recall    = float(recall_score(targets, preds, average="weighted", zero_division=0))
-    f1        = float(f1_score(targets, preds, average="weighted", zero_division=0))
-
-    print(f"\n[RESULT] acc={acc:.4f}  prec={precision:.4f}  rec={recall:.4f}  f1={f1:.4f}")
-    print(classification_report(targets, preds, target_names=le.classes_, zero_division=0))
-
-    joblib.dump(le, le_save_path)
+        y_pred = clf.predict(x_test)
+        acc = float(accuracy_score(y_test, y_pred))
+        precision = float(precision_score(y_test, y_pred, average="weighted", zero_division=0))
+        recall = float(recall_score(y_test, y_pred, average="weighted", zero_division=0))
+        f1 = float(f1_score(y_test, y_pred, average="weighted", zero_division=0))
+        cm = confusion_matrix(y_test, y_pred)
     
-    if _PLT:
-        cm = confusion_matrix(targets, preds)
-        path = npath(RESULT_DIR, f"confusion_matrix_{objective}.png")
-        fig, ax = plt.subplots(figsize=(max(6, num_classes), max(5, num_classes - 1)))
-        ConfusionMatrixDisplay(cm, display_labels=le.classes_).plot(ax=ax, colorbar=False, cmap="Blues")
-        ax.set_title(f"Confusion matrix — {objective}")
-        plt.tight_layout()
-        plt.savefig(path, dpi=150)
-        plt.close(fig)
-
-    metrics = {
-        "objective":    objective,
-        "accuracy":     acc,
-        "precision":    precision,
-        "recall":       recall,
-        "f1":           f1,
-        "train_images": len(train_paths),
-        "test_images":  len(test_paths),
-    }
+        print(f"[RESULT] accuracy={acc:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}")
+        print("[REPORT]")
+        print(classification_report(y_test, y_pred, target_names=le.classes_, zero_division=0))
     
-    metrics_path = npath(RESULT_DIR, f"metrics_{objective}.json")
-    with open(metrics_path, "w", encoding="utf-8") as f:
-        json.dump(metrics, f, indent=2)
-
-    return metrics
-
-def predict_single_image(image_path: str) -> Dict[str, str]:
-    try:
-        img = Image.open(image_path).convert("RGB")
-    except Exception as exc:
-        return {"error": f"Could not load {image_path}: {exc}"}
-
-    transform = get_transforms(is_train=False)
-    t = transform(img).unsqueeze(0).to(_DEVICE)
-
-    results: Dict[str, str] = {}
-    for obj in OBJECTIVES:
-        le_path = npath(MODEL_DIR, f"le_{obj}.joblib")
-        model_path = npath(MODEL_DIR, f"model_{obj}.pth")
+        cm_path = _save_confusion_plot(cm, le.classes_, objective)
+    
+        model_path = npath(MODEL_DIR, f"rf_{objective}.joblib")
+        encoder_path = npath(MODEL_DIR, f"le_{objective}.joblib")
+        scaler_path = npath(MODEL_DIR, f"scaler_{objective}.joblib")
+        try:
+            joblib.dump(clf, model_path)
+            joblib.dump(le, encoder_path)
+            joblib.dump(scaler, scaler_path)
+        except OSError as exc:
+            print(f"[ERROR] Failed saving model artifacts: {exc}")
+            return None
+    
+        metrics = {
+            "objective": objective,
+            "accuracy": acc,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "train_images": float(len(train_paths)),
+            "test_images": float(len(test_paths)),
+            "feature_dim": float(x_train.shape[1]),
+        }
+        metrics_path = _save_metrics_json(objective, metrics)
         
-        if not os.path.exists(le_path) or not os.path.exists(model_path):
-            results[obj] = "model_not_trained"
-            continue
-            
-        le = joblib.load(le_path)
-        model = build_model(len(le.classes_))
-        model.load_state_dict(torch.load(model_path, map_location=_DEVICE, weights_only=True))
-        model.eval()
+        mlflow.log_param("objective", objective)
+        mlflow.log_params({
+            "n_estimators": 300,
+            "class_weight": "balanced",
+            "min_samples_split": 5,
+            "min_samples_leaf": 2,
+            "random_state": 42
+        })
+        mlflow.log_metrics({
+            "accuracy": acc,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "train_images": float(len(train_paths)),
+            "test_images": float(len(test_paths)),
+            "feature_dim": float(x_train.shape[1])
+        })
+        mlflow.sklearn.log_model(clf, f"rf_model_{objective}")
+        mlflow.log_artifact(encoder_path)
+        mlflow.log_artifact(scaler_path)
+        if cm_path:
+            mlflow.log_artifact(cm_path)
+        mlflow.log_artifact(metrics_path)
+    
+        print(f"[INFO] Model saved: {model_path}")
+        print(f"[INFO] Label encoder saved: {encoder_path}")
+        print(f"[INFO] Scaler saved: {scaler_path}")
+        if cm_path:
+            print(f"[INFO] Confusion matrix saved: {cm_path}")
+        print(f"[INFO] Metrics saved: {metrics_path}")
+    
+        return metrics
 
-        with torch.no_grad():
-            with torch.amp.autocast(_DEVICE.type):
-                outputs = model(t)
-            probs = torch.nn.functional.softmax(outputs, dim=1)
-            conf, pred_idx = torch.max(probs, dim=1)
-            
-        pred_label = le.inverse_transform([pred_idx.item()])[0]
-        results[obj] = pred_label
-        results[f"{obj}_confidence"] = f"{conf.item():.3f}"
-
-    return results
 
 def main() -> int:
-    summary: List[Dict] = []
     all_ok = True
-
     for objective in OBJECTIVES:
         result = train_and_evaluate(objective)
         if result is None:
             all_ok = False
-        else:
-            summary.append(result)
-
-    if summary:
-        print("\n" + "=" * 72)
-        print(f"  {'Objective':<20} {'Acc':>7} {'F1':>7}")
-        print("-" * 64)
-        for m in summary:
-            print(f"  {m['objective']:<20} {m['accuracy']:>7.4f} {m['f1']:>7.4f}")
-        print("=" * 72)
-
     return 0 if all_ok else 1
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
