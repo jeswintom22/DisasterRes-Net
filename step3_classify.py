@@ -21,7 +21,10 @@ from sklearn.metrics import (
     recall_score,
 )
 from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 from skimage.feature import graycomatrix, graycoprops
+import pandas as pd
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
@@ -302,8 +305,13 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
     if glcm_train.shape[1] != 20:
         print(f"[WARN] GLCM feature dim is {glcm_train.shape[1]}, expected 20.")
 
-    x_train = np.hstack([deep_train, glcm_train])
-    x_test = np.hstack([deep_test, glcm_test])
+    print("[INFO] Applying PCA to deep features (1536 -> 128)")
+    pca = PCA(n_components=128, random_state=42)
+    deep_train_pca = pca.fit_transform(deep_train)
+    deep_test_pca = pca.transform(deep_test)
+
+    x_train = np.hstack([deep_train_pca, glcm_train])
+    x_test = np.hstack([deep_test_pca, glcm_test])
 
     scaler = StandardScaler()
     x_train = scaler.fit_transform(x_train)
@@ -311,6 +319,7 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
     print(f"[INFO] Fused feature shape train: {x_train.shape} (normalized)")
     print(f"[INFO] Fused feature shape test : {x_test.shape} (normalized)")
 
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
     mlflow.set_experiment("DisasterRes-Net")
     with mlflow.start_run(run_name=f"rf_{objective}"):
         clf = RandomForestClassifier(
@@ -321,6 +330,14 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
             random_state=42,
             n_jobs=-1,
         )
+        
+        print("[INFO] Running Stratified K-Fold Cross Validation (5 folds)...")
+        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        cv_scores = cross_val_score(clf, x_train, y_train, cv=skf, scoring='accuracy')
+        cv_mean = float(cv_scores.mean())
+        cv_std = float(cv_scores.std())
+        print(f"[RESULT] CV Accuracy: {cv_mean:.4f} ± {cv_std:.4f}")
+
         try:
             clf.fit(x_train, y_train)
         except Exception as exc:
@@ -334,7 +351,7 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         f1 = float(f1_score(y_test, y_pred, average="weighted", zero_division=0))
         cm = confusion_matrix(y_test, y_pred)
     
-        print(f"[RESULT] accuracy={acc:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}")
+        print(f"[RESULT] Test accuracy={acc:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}")
         print("[REPORT]")
         print(classification_report(y_test, y_pred, target_names=le.classes_, zero_division=0))
     
@@ -343,13 +360,31 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         model_path = npath(MODEL_DIR, f"rf_{objective}.joblib")
         encoder_path = npath(MODEL_DIR, f"le_{objective}.joblib")
         scaler_path = npath(MODEL_DIR, f"scaler_{objective}.joblib")
+        pca_path = npath(MODEL_DIR, f"pca_{objective}.joblib")
         try:
             joblib.dump(clf, model_path)
             joblib.dump(le, encoder_path)
             joblib.dump(scaler, scaler_path)
+            joblib.dump(pca, pca_path)
         except OSError as exc:
             print(f"[ERROR] Failed saving model artifacts: {exc}")
             return None
+
+        # Feature Importances
+        pca_names = [f"deep_pca_{i+1}" for i in range(128)]
+        glcm_names = []
+        for ang in ["0", "45", "90", "135"]:
+            for prop in ["contrast", "correlation", "energy", "homogeneity", "entropy"]:
+                glcm_names.append(f"glcm_{prop}_{ang}")
+        feature_names = pca_names + glcm_names
+        
+        importances_df = pd.DataFrame({
+            "feature": feature_names,
+            "importance": clf.feature_importances_
+        }).sort_values(by="importance", ascending=False)
+        
+        importances_path = npath(RESULT_DIR, f"feature_importances_{objective}.csv")
+        importances_df.to_csv(importances_path, index=False)
     
         metrics = {
             "objective": objective,
@@ -357,6 +392,8 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
             "precision": precision,
             "recall": recall,
             "f1": f1,
+            "cv_accuracy_mean": cv_mean,
+            "cv_accuracy_std": cv_std,
             "train_images": float(len(train_paths)),
             "test_images": float(len(test_paths)),
             "feature_dim": float(x_train.shape[1]),
@@ -369,13 +406,16 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
             "class_weight": "balanced",
             "min_samples_split": 5,
             "min_samples_leaf": 2,
-            "random_state": 42
+            "random_state": 42,
+            "pca_components": 128
         })
         mlflow.log_metrics({
             "accuracy": acc,
             "precision": precision,
             "recall": recall,
             "f1": f1,
+            "cv_accuracy_mean": cv_mean,
+            "cv_accuracy_std": cv_std,
             "train_images": float(len(train_paths)),
             "test_images": float(len(test_paths)),
             "feature_dim": float(x_train.shape[1])
@@ -383,13 +423,17 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         mlflow.sklearn.log_model(clf, f"rf_model_{objective}")
         mlflow.log_artifact(encoder_path)
         mlflow.log_artifact(scaler_path)
+        mlflow.log_artifact(pca_path)
         if cm_path:
             mlflow.log_artifact(cm_path)
+        mlflow.log_artifact(importances_path)
         mlflow.log_artifact(metrics_path)
     
         print(f"[INFO] Model saved: {model_path}")
         print(f"[INFO] Label encoder saved: {encoder_path}")
         print(f"[INFO] Scaler saved: {scaler_path}")
+        print(f"[INFO] PCA saved: {pca_path}")
+        print(f"[INFO] Feature importances saved: {importances_path}")
         if cm_path:
             print(f"[INFO] Confusion matrix saved: {cm_path}")
         print(f"[INFO] Metrics saved: {metrics_path}")
