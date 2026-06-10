@@ -10,7 +10,7 @@ import mlflow
 import mlflow.sklearn
 import numpy as np
 from PIL import Image, UnidentifiedImageError
-from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     accuracy_score,
@@ -21,7 +21,10 @@ from sklearn.metrics import (
     recall_score,
 )
 from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 from skimage.feature import graycomatrix, graycoprops
+import pandas as pd
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
@@ -42,7 +45,7 @@ try:
             tf.config.experimental.set_memory_growth(_g, True)
         print(f"[INFO] CUDA GPU detected: {_gpus[0].name}")
     else:
-        print("[WARN] No GPU found — running on CPU (slower).")
+        print("[WARN] No GPU found ΓÇö running on CPU (slower).")
 
     from tensorflow.keras.applications import InceptionResNetV2
     from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input
@@ -104,19 +107,56 @@ def _is_image(name: str) -> bool:
     return name.lower().endswith(IMG_EXTS)
 
 
-def build_feature_extractor() -> Optional[object]:
-    if InceptionResNetV2 is None or preprocess_input is None or Model is None:
+def make_tf_dataset(paths: Sequence[str], labels: Sequence[int], batch_size: int = BATCH_SIZE) -> object:
+    import tensorflow as tf
+    ds = tf.data.Dataset.from_tensor_slices((list(paths), list(labels)))
+    ds = ds.shuffle(len(paths), seed=42)
+    
+    def load_and_prep(path, label):
+        img = tf.io.read_file(path)
+        img = tf.image.decode_jpeg(img, channels=3)
+        img = tf.image.resize(img, [299, 299])
+        img = tf.keras.applications.inception_resnet_v2.preprocess_input(img)
+        return img, label
+
+    ds = ds.map(load_and_prep, num_parallel_calls=tf.data.AUTOTUNE)
+    ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    return ds
+
+
+def finetune_extractor(train_paths: Sequence[str], y_train: np.ndarray, num_classes: int) -> Optional[object]:
+    if InceptionResNetV2 is None or Model is None:
         return None
     try:
+        import tensorflow as tf
         base = InceptionResNetV2(
             weights="imagenet", include_top=False, pooling="avg",
             input_shape=(299, 299, 3),
         )
-        model = Model(inputs=base.input, outputs=base.output)
-        model.trainable = False
-        return model
+        base.trainable = True
+        for layer in base.layers[:-50]:
+            layer.trainable = False
+            
+        x = base.output
+        x = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
+        model = Model(inputs=base.input, outputs=x)
+        
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
+            loss="sparse_categorical_crossentropy",
+            metrics=["accuracy"]
+        )
+        
+        print(f"[INFO] Building tf.data.Dataset for fine-tuning ({len(train_paths)} images)...")
+        train_ds = make_tf_dataset(train_paths, y_train, BATCH_SIZE)
+        
+        print("[INFO] Fine-tuning InceptionResNetV2 backbone for 5 epochs...")
+        model.fit(train_ds, epochs=5)
+        
+        extractor = Model(inputs=model.input, outputs=base.output)
+        return extractor
     except Exception as exc:
-        print(f"[ERROR] Failed to build InceptionResNetV2 extractor: {exc}")
+        print(f"[ERROR] Failed to fine-tune InceptionResNetV2: {exc}")
         return None
 
 
@@ -276,11 +316,6 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
     print(f"STEP 3 - Objective: {objective}")
     print("=" * 70)
 
-    extractor = build_feature_extractor()
-    if extractor is None:
-        print("[ERROR] Feature extractor unavailable. Install TensorFlow and retry.")
-        return None
-
     train_paths, train_labels = load_split("train", objective)
     test_paths, test_labels = load_split("test", objective)
 
@@ -292,6 +327,11 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
     y_train = le.fit_transform(train_labels)
     y_test = le.transform(test_labels)
 
+    extractor = finetune_extractor(train_paths, y_train, len(le.classes_))
+    if extractor is None:
+        print("[ERROR] Feature extractor unavailable or fine-tuning failed.")
+        return None
+
     deep_train = extract_deep_features(extractor, train_paths)
     deep_test = extract_deep_features(extractor, test_paths)
     glcm_train = extract_all_glcm(train_paths)
@@ -302,8 +342,13 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
     if glcm_train.shape[1] != 20:
         print(f"[WARN] GLCM feature dim is {glcm_train.shape[1]}, expected 20.")
 
-    x_train = np.hstack([deep_train, glcm_train])
-    x_test = np.hstack([deep_test, glcm_test])
+    print("[INFO] Applying PCA to deep features (1536 -> 32)")
+    pca = PCA(n_components=32, random_state=42)
+    deep_train_pca = pca.fit_transform(deep_train)
+    deep_test_pca = pca.transform(deep_test)
+
+    x_train = np.hstack([deep_train_pca, glcm_train])
+    x_test = np.hstack([deep_test_pca, glcm_test])
 
     scaler = StandardScaler()
     x_train = scaler.fit_transform(x_train)
@@ -311,16 +356,26 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
     print(f"[INFO] Fused feature shape train: {x_train.shape} (normalized)")
     print(f"[INFO] Fused feature shape test : {x_test.shape} (normalized)")
 
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
     mlflow.set_experiment("DisasterRes-Net")
     with mlflow.start_run(run_name=f"rf_{objective}"):
-        clf = RandomForestClassifier(
+        clf = XGBClassifier(
             n_estimators=300,
-            class_weight="balanced",
-            min_samples_split=5,
-            min_samples_leaf=2,
-            random_state=42,
+            max_depth=6,
+            learning_rate=0.05,
+            eval_metric='mlogloss',
+            tree_method='hist',
             n_jobs=-1,
+            random_state=42
         )
+        
+        print("[INFO] Running Stratified K-Fold Cross Validation (5 folds)...")
+        skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        cv_scores = cross_val_score(clf, x_train, y_train, cv=skf, scoring='accuracy')
+        cv_mean = float(cv_scores.mean())
+        cv_std = float(cv_scores.std())
+        print(f"[RESULT] CV Accuracy: {cv_mean:.4f} ┬▒ {cv_std:.4f}")
+
         try:
             clf.fit(x_train, y_train)
         except Exception as exc:
@@ -334,7 +389,7 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         f1 = float(f1_score(y_test, y_pred, average="weighted", zero_division=0))
         cm = confusion_matrix(y_test, y_pred)
     
-        print(f"[RESULT] accuracy={acc:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}")
+        print(f"[RESULT] Test accuracy={acc:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}")
         print("[REPORT]")
         print(classification_report(y_test, y_pred, target_names=le.classes_, zero_division=0))
     
@@ -343,13 +398,31 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         model_path = npath(MODEL_DIR, f"rf_{objective}.joblib")
         encoder_path = npath(MODEL_DIR, f"le_{objective}.joblib")
         scaler_path = npath(MODEL_DIR, f"scaler_{objective}.joblib")
+        pca_path = npath(MODEL_DIR, f"pca_{objective}.joblib")
         try:
             joblib.dump(clf, model_path)
             joblib.dump(le, encoder_path)
             joblib.dump(scaler, scaler_path)
+            joblib.dump(pca, pca_path)
         except OSError as exc:
             print(f"[ERROR] Failed saving model artifacts: {exc}")
             return None
+
+        # Feature Importances
+        pca_names = [f"deep_pca_{i+1}" for i in range(32)]
+        glcm_names = []
+        for ang in ["0", "45", "90", "135"]:
+            for prop in ["contrast", "correlation", "energy", "homogeneity", "entropy"]:
+                glcm_names.append(f"glcm_{prop}_{ang}")
+        feature_names = pca_names + glcm_names
+        
+        importances_df = pd.DataFrame({
+            "feature": feature_names,
+            "importance": clf.feature_importances_
+        }).sort_values(by="importance", ascending=False)
+        
+        importances_path = npath(RESULT_DIR, f"feature_importances_{objective}.csv")
+        importances_df.to_csv(importances_path, index=False)
     
         metrics = {
             "objective": objective,
@@ -357,6 +430,8 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
             "precision": precision,
             "recall": recall,
             "f1": f1,
+            "cv_accuracy_mean": cv_mean,
+            "cv_accuracy_std": cv_std,
             "train_images": float(len(train_paths)),
             "test_images": float(len(test_paths)),
             "feature_dim": float(x_train.shape[1]),
@@ -366,30 +441,37 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         mlflow.log_param("objective", objective)
         mlflow.log_params({
             "n_estimators": 300,
-            "class_weight": "balanced",
-            "min_samples_split": 5,
-            "min_samples_leaf": 2,
-            "random_state": 42
+            "max_depth": 6,
+            "learning_rate": 0.05,
+            "tree_method": "hist",
+            "random_state": 42,
+            "pca_components": 32
         })
         mlflow.log_metrics({
             "accuracy": acc,
             "precision": precision,
             "recall": recall,
             "f1": f1,
+            "cv_accuracy_mean": cv_mean,
+            "cv_accuracy_std": cv_std,
             "train_images": float(len(train_paths)),
             "test_images": float(len(test_paths)),
             "feature_dim": float(x_train.shape[1])
         })
-        mlflow.sklearn.log_model(clf, f"rf_model_{objective}")
+        mlflow.sklearn.log_model(clf, f"xgb_model_{objective}")
         mlflow.log_artifact(encoder_path)
         mlflow.log_artifact(scaler_path)
+        mlflow.log_artifact(pca_path)
         if cm_path:
             mlflow.log_artifact(cm_path)
+        mlflow.log_artifact(importances_path)
         mlflow.log_artifact(metrics_path)
     
         print(f"[INFO] Model saved: {model_path}")
         print(f"[INFO] Label encoder saved: {encoder_path}")
         print(f"[INFO] Scaler saved: {scaler_path}")
+        print(f"[INFO] PCA saved: {pca_path}")
+        print(f"[INFO] Feature importances saved: {importances_path}")
         if cm_path:
             print(f"[INFO] Confusion matrix saved: {cm_path}")
         print(f"[INFO] Metrics saved: {metrics_path}")
