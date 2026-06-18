@@ -1,0 +1,99 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Read(//opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/bin/**)",
+      "WebFetch(domain:localhost)",
+
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
+      "Bash(echo:*)",
+
+      "Bash(lsof -ti:*)",
+      "Bash(xargs kill:*)",
+      "Bash(pkill -f uvicorn:*)",
+      "Bash(pkill -f vite:*)",
+      "Bash(pkill -f 'python probe.py')",
+      "Bash(pkill -9 -f 'claude -p')",
+      "Bash(jobs -l)",
+
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git blame:*)",
+      "Bash(git fetch:*)",
+      "Bash(git stash:*)",
+      "Bash(git pull:*)",
+      "Bash(git fsck:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git branch:*)",
+      "Bash(git remote -v)",
+
+      "Bash(npm run:*)",
+      "Bash(npx firebase:*)",
+      "Bash(npx prettier:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx playwright:*)",
+      "Bash(pytest:*)",
+
+      "Bash(curl -s http://localhost:8000/*)",
+      "Bash(curl -s -X POST http://localhost:8000/*)",
+
+      "Bash(pg_dump --version)",
+      "Bash(magick -version)",
+      "Bash(gcloud version:*)",
+      "Bash(claude -p --help)",
+
+      "Edit(/.claude/skills/loka-db-clone/**)",
+      "Edit(/.claude/skills/brainstorm/**)",
+      "Edit(/.claude/skills/capture-behavior/**)",
+      "Edit(/.claude/skills/check-issue/**)",
+      "Edit(/.claude/skills/claude-settings-cleanup/**)",
+      "Edit(/.claude/skills/db-reset/**)",
+      "Edit(/.claude/skills/domain-finder/**)"
+    ],
+    "additionalDirectories": [
+      "/Users/nitjames/MyDocuments/Vizlake AI Projects/DigitalAiTwin",
+      "/Users/nithinjames/.claude/projects/-Users-nithinjames-Projects-GithubNithin-Loka/babb3e42-e359-4d36-bdfd-1f18df777e23/tool-results"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/lint-frontend.sh",
+            "timeout": 30000
+          },
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/lint-backend.sh",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-commit-check.sh",
+            "timeout": 120000
+          }
+        ]
+      }
+    ]
+  }
+}

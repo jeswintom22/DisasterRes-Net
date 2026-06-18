@@ -1,0 +1,45 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3737,
+      "cwd": "app/frontend"
+    },
+    {
+      "name": "loka-frontend",
+      "runtimeExecutable": "/opt/homebrew/bin/node",
+      "runtimeArgs": [
+        "/opt/homebrew/bin/npm",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5174"
+      ],
+      "env": { "PATH": "/opt/homebrew/bin:/usr/bin:/bin" },
+      "port": 5174,
+      "cwd": "/Users/nithinjames/Projects/GithubNithin/Loka/app/frontend"
+    },
+    {
+      "name": "loka-pwa",
+      "runtimeExecutable": "/opt/homebrew/bin/node",
+      "runtimeArgs": [
+        "/opt/homebrew/bin/npm",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5175"
+      ],
+      "env": {
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin",
+        "VITE_MOCK_API": "true"
+      },
+      "port": 5175,
+      "cwd": "/Users/nithinjames/Projects/GithubNithin/Loka/app/pwa"
+    }
+  ]
+}
