@@ -1,9 +1,11 @@
-"""Step 3: extract features, train Random Forest, evaluate, and save models."""
+"""Step 3: extract features, train XGBoost, evaluate, and save models."""
 
 import json
 import os
 import warnings
 from typing import Dict, List, Optional, Sequence, Tuple
+import hashlib
+import concurrent.futures
 
 import joblib
 import mlflow
@@ -36,26 +38,27 @@ except Exception as exc:
     print(f"[WARN] matplotlib import failed: {exc}. Confusion image generation will be disabled.")
 
 try:
-    import tensorflow as tf
-
-    # --- GPU / CUDA setup ---
-    _gpus = tf.config.list_physical_devices("GPU")
-    if _gpus:
-        for _g in _gpus:
-            tf.config.experimental.set_memory_growth(_g, True)
-        print(f"[INFO] CUDA GPU detected: {_gpus[0].name}")
-    else:
-        print("[WARN] No GPU found ΓÇö running on CPU (slower).")
-
-    from tensorflow.keras.applications import InceptionResNetV2
-    from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input
-    from tensorflow.keras.models import Model
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import Dataset, DataLoader
+    import torchvision.transforms as transforms
+    import timm
 except Exception as exc:
-    InceptionResNetV2 = None
-    preprocess_input = None
-    Model = None
-    print(f"[ERROR] TensorFlow import failed: {exc}")
-    print("[ERROR] Install TensorFlow for Python 3.10 (Windows), then retry.")
+    torch = None
+    timm = None
+    print(f"[ERROR] PyTorch / timm import failed: {exc}")
+    print("[ERROR] Install torch, torchvision, and timm for Python 3.10 (Windows), then retry.")
+
+_device = None
+def get_device():
+    global _device
+    if _device is None and torch is not None:
+        _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if _device.type == "cuda":
+            print(f"[INFO] CUDA GPU detected: {torch.cuda.get_device_name(0)}")
+        else:
+            print("[WARN] No GPU found — running on CPU (slower).")
+    return _device
 
 
 def npath(*parts: str) -> str:
@@ -65,6 +68,7 @@ def npath(*parts: str) -> str:
 SPLIT_DIR = npath("split_dataset")
 MODEL_DIR = npath("saved_models")
 RESULT_DIR = npath("results")
+GLCM_CACHE_DIR = npath(".cache")
 IMG_SIZE = (299, 299)
 BATCH_SIZE = 64
 
@@ -73,6 +77,7 @@ IMG_EXTS = (".jpg", ".jpeg", ".png")
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(RESULT_DIR, exist_ok=True)
+os.makedirs(GLCM_CACHE_DIR, exist_ok=True)
 
 
 DEFAULT_LABEL_MAPS = {
@@ -107,97 +112,137 @@ def _is_image(name: str) -> bool:
     return name.lower().endswith(IMG_EXTS)
 
 
-def make_tf_dataset(paths: Sequence[str], labels: Sequence[int], batch_size: int = BATCH_SIZE) -> object:
-    import tensorflow as tf
-    ds = tf.data.Dataset.from_tensor_slices((list(paths), list(labels)))
-    ds = ds.shuffle(len(paths), seed=42)
-    
-    def load_and_prep(path, label):
-        img = tf.io.read_file(path)
-        img = tf.image.decode_jpeg(img, channels=3)
-        img = tf.image.resize(img, [299, 299])
-        img = tf.keras.applications.inception_resnet_v2.preprocess_input(img)
-        return img, label
+class DisasterDataset(Dataset):
+    def __init__(self, paths, labels, transform=None):
+        self.paths = paths
+        self.labels = labels
+        self.transform = transform
 
-    ds = ds.map(load_and_prep, num_parallel_calls=tf.data.AUTOTUNE)
-    ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
-    return ds
+    def __len__(self):
+        return len(self.paths)
 
-
-def finetune_extractor(train_paths: Sequence[str], y_train: np.ndarray, num_classes: int) -> Optional[object]:
-    if InceptionResNetV2 is None or Model is None:
-        return None
-    try:
-        import tensorflow as tf
-        base = InceptionResNetV2(
-            weights="imagenet", include_top=False, pooling="avg",
-            input_shape=(299, 299, 3),
-        )
-        base.trainable = True
-        for layer in base.layers[:-50]:
-            layer.trainable = False
-            
-        x = base.output
-        x = tf.keras.layers.Dense(num_classes, activation='softmax')(x)
-        model = Model(inputs=base.input, outputs=x)
-        
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
-            loss="sparse_categorical_crossentropy",
-            metrics=["accuracy"]
-        )
-        
-        print(f"[INFO] Building tf.data.Dataset for fine-tuning ({len(train_paths)} images)...")
-        train_ds = make_tf_dataset(train_paths, y_train, BATCH_SIZE)
-        
-        print("[INFO] Fine-tuning InceptionResNetV2 backbone for 5 epochs...")
-        model.fit(train_ds, epochs=5)
-        
-        extractor = Model(inputs=model.input, outputs=base.output)
-        return extractor
-    except Exception as exc:
-        print(f"[ERROR] Failed to fine-tune InceptionResNetV2: {exc}")
-        return None
-
-
-def _load_rgb_299(path: str) -> Optional[np.ndarray]:
-    try:
-        with Image.open(path) as img:
-            img = img.convert("RGB")
-            img = img.resize(IMG_SIZE, Image.Resampling.LANCZOS)
-            return np.asarray(img, dtype=np.float32)
-    except UnidentifiedImageError as exc:
-        print(f"[WARN] Corrupt image skipped: '{path}'. Reason: {exc}")
-        return None
-    except OSError as exc:
-        print(f"[WARN] Could not read image '{path}': {exc}")
-        return None
-
-
-def extract_deep_features(model: object, image_paths: Sequence[str], batch_size: int = BATCH_SIZE) -> np.ndarray:
-    features: List[np.ndarray] = []
-    fallback_count = 0
-    for start in tqdm(range(0, len(image_paths), batch_size), desc="  Deep features"):
-        batch_paths = image_paths[start : start + batch_size]
-        batch_imgs: List[np.ndarray] = []
-        for pth in batch_paths:
-            arr = _load_rgb_299(pth)
-            if arr is None:
-                arr = np.zeros((299, 299, 3), dtype=np.float32)
-                fallback_count += 1
-            batch_imgs.append(arr)
-        batch_array = np.asarray(batch_imgs, dtype=np.float32)
-        batch_array = preprocess_input(batch_array)
+    def __getitem__(self, idx):
+        path = self.paths[idx]
+        label = self.labels[idx]
         try:
-            preds = model.predict(batch_array, verbose=0)
-        except Exception as exc:
-            print(f"[ERROR] Deep feature extraction failed for batch starting at {start}: {exc}")
-            preds = np.zeros((len(batch_paths), 1000), dtype=np.float32)
-        features.extend(preds)
+            with Image.open(path) as img:
+                img = img.convert("RGB")
+                if self.transform:
+                    img = self.transform(img)
+                return img, label
+        except Exception:
+            return torch.zeros((3, 299, 299), dtype=torch.float32), label
 
-    if fallback_count:
-        print(f"[WARN] Deep features used blank fallback for {fallback_count} unreadable images.")
-    return np.asarray(features, dtype=np.float32)
+
+def get_transforms(train: bool = False):
+    if train:
+        return transforms.Compose([
+            transforms.Resize(IMG_SIZE),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(15),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+    else:
+        return transforms.Compose([
+            transforms.Resize(IMG_SIZE),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+
+def finetune_extractor(train_paths: Sequence[str], y_train: np.ndarray, num_classes: int, objective: str):
+    if timm is None or torch is None:
+        return None
+    try:
+        model = timm.create_model('inception_resnet_v2', pretrained=True, num_classes=num_classes)
+        
+        # Freeze all parameters first
+        named_params = list(model.named_parameters())
+        for name, param in named_params:
+            param.requires_grad = False
+            
+        # Unfreeze the last 100 parameter tensors
+        for name, param in named_params[-100:]:
+            param.requires_grad = True
+
+        device = get_device()
+        model = model.to(device)
+        
+        # Partition parameters for differential learning rates
+        backbone_params = []
+        head_params = []
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                if 'classif' in name or 'fc' in name:
+                    head_params.append(param)
+                else:
+                    backbone_params.append(param)
+                    
+        optimizer = torch.optim.Adam([
+            {'params': backbone_params, 'lr': 1e-5},
+            {'params': head_params, 'lr': 1e-4}
+        ])
+        criterion = nn.CrossEntropyLoss()
+        
+        transform = get_transforms(train=True)
+        dataset = DisasterDataset(train_paths, y_train, transform)
+        loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
+        
+        print(f"[INFO] Fine-tuning InceptionResNetV2 backbone for 5 epochs...")
+        model.train()
+        for epoch in range(5):
+            running_loss = 0.0
+            for imgs, labels in loader:
+                imgs = imgs.to(device)
+                labels = torch.tensor(labels, dtype=torch.long).to(device)
+                optimizer.zero_grad()
+                outputs = model(imgs)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item() * imgs.size(0)
+            epoch_loss = running_loss / len(dataset)
+            print(f"Epoch {epoch+1}/5 Loss: {epoch_loss:.4f}")
+            
+        os.makedirs(MODEL_DIR, exist_ok=True)
+        model_path = npath(MODEL_DIR, f"model_{objective}.pth")
+        torch.save(model.state_dict(), model_path)
+        print(f"[INFO] Saved fine-tuned PyTorch model to {model_path}")
+        
+        if objective == "informativeness":
+            compat_model_path = npath(MODEL_DIR, "model_disaster_type.pth")
+            torch.save(model.state_dict(), compat_model_path)
+            print(f"[INFO] Saved compatibility duplicate model to {compat_model_path}")
+
+        model.reset_classifier(0)
+        return model
+    except Exception as exc:
+        print(f"[ERROR] Failed to fine-tune PyTorch model: {exc}")
+        return None
+
+
+def extract_deep_features(model, image_paths: Sequence[str], batch_size: int = BATCH_SIZE) -> np.ndarray:
+    model.eval()
+    transform = get_transforms(train=False)
+    dataset = DisasterDataset(image_paths, [0]*len(image_paths), transform)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
+    
+    device = get_device()
+    features = []
+    with torch.no_grad():
+        for imgs, _ in tqdm(loader, desc="  Deep features"):
+            imgs = imgs.to(device)
+            try:
+                preds = model(imgs)
+                features.append(preds.cpu().numpy())
+            except Exception as exc:
+                print(f"[ERROR] Deep extraction failed: {exc}")
+                features.append(np.zeros((imgs.size(0), 1536), dtype=np.float32))
+                
+    if features:
+        return np.vstack(features)
+    return np.array([])
 
 
 def extract_glcm_features(image_path: str) -> np.ndarray:
@@ -232,10 +277,40 @@ def extract_glcm_features(image_path: str) -> np.ndarray:
 
 
 def extract_all_glcm(image_paths: Sequence[str]) -> np.ndarray:
-    feats: List[np.ndarray] = []
-    for pth in tqdm(image_paths, desc="  GLCM features"):
-        feats.append(extract_glcm_features(pth))
-    return np.asarray(feats, dtype=np.float32)
+    hasher = hashlib.md5()
+    for pth in image_paths:
+        try:
+            mtime = os.path.getmtime(pth)
+            hasher.update(f"{pth}_{mtime}".encode('utf-8'))
+        except OSError:
+            hasher.update(pth.encode('utf-8'))
+    
+    cache_key = hasher.hexdigest()
+    cache_file = npath(GLCM_CACHE_DIR, f"{cache_key}.npz")
+    
+    if os.path.exists(cache_file):
+        print(f"[INFO] Loading GLCM features from cache: {cache_file}")
+        data = np.load(cache_file)
+        return data['arr_0']
+        
+    print("[INFO] Extracting GLCM features in parallel...")
+    feats = []
+    
+    # Prevent OpenBLAS from creating thread pools in every child process, 
+    # which exhausts system RAM when multiplied by the number of workers.
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+    
+    # Limit workers to avoid out-of-memory errors on laptops
+    workers = min(8, os.cpu_count() or 1)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+        results = list(tqdm(executor.map(extract_glcm_features, image_paths), total=len(image_paths), desc="  GLCM features"))
+    feats = np.asarray(results, dtype=np.float32)
+    
+    np.savez_compressed(cache_file, feats)
+    return feats
 
 
 def _infer_label_map(objective: str, split_dir: str) -> Dict[str, str]:
@@ -327,13 +402,19 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
     y_train = le.fit_transform(train_labels)
     y_test = le.transform(test_labels)
 
-    extractor = finetune_extractor(train_paths, y_train, len(le.classes_))
+    extractor = finetune_extractor(train_paths, y_train, len(le.classes_), objective)
     if extractor is None:
         print("[ERROR] Feature extractor unavailable or fine-tuning failed.")
         return None
 
     deep_train = extract_deep_features(extractor, train_paths)
     deep_test = extract_deep_features(extractor, test_paths)
+    
+    # Free up GPU memory
+    del extractor
+    if torch is not None and torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     glcm_train = extract_all_glcm(train_paths)
     glcm_test = extract_all_glcm(test_paths)
 
@@ -342,8 +423,8 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
     if glcm_train.shape[1] != 20:
         print(f"[WARN] GLCM feature dim is {glcm_train.shape[1]}, expected 20.")
 
-    print("[INFO] Applying PCA to deep features (1536 -> 32)")
-    pca = PCA(n_components=32, random_state=42)
+    print("[INFO] Applying PCA to deep features (1536 -> 64)")
+    pca = PCA(n_components=64, random_state=42)
     deep_train_pca = pca.fit_transform(deep_train)
     deep_test_pca = pca.transform(deep_test)
 
@@ -374,12 +455,12 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         cv_scores = cross_val_score(clf, x_train, y_train, cv=skf, scoring='accuracy')
         cv_mean = float(cv_scores.mean())
         cv_std = float(cv_scores.std())
-        print(f"[RESULT] CV Accuracy: {cv_mean:.4f} ┬▒ {cv_std:.4f}")
+        print(f"[RESULT] CV Accuracy: {cv_mean:.4f} ± {cv_std:.4f}")
 
         try:
             clf.fit(x_train, y_train)
         except Exception as exc:
-            print(f"[ERROR] RandomForest training failed: {exc}")
+            print(f"[ERROR] XGBoost training failed: {exc}")
             return None
     
         y_pred = clf.predict(x_test)
@@ -402,14 +483,17 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         try:
             joblib.dump(clf, model_path)
             joblib.dump(le, encoder_path)
+            if objective == "informativeness":
+                compat_encoder_path = npath(MODEL_DIR, "le_disaster_type.joblib")
+                joblib.dump(le, compat_encoder_path)
+                print(f"[INFO] Saved compatibility duplicate label encoder to {compat_encoder_path}")
             joblib.dump(scaler, scaler_path)
             joblib.dump(pca, pca_path)
         except OSError as exc:
             print(f"[ERROR] Failed saving model artifacts: {exc}")
             return None
 
-        # Feature Importances
-        pca_names = [f"deep_pca_{i+1}" for i in range(32)]
+        pca_names = [f"deep_pca_{i+1}" for i in range(64)]
         glcm_names = []
         for ang in ["0", "45", "90", "135"]:
             for prop in ["contrast", "correlation", "energy", "homogeneity", "entropy"]:

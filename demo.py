@@ -11,23 +11,14 @@ Usage:
 import warnings
 warnings.filterwarnings("ignore")
 import os
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-import os
 import sys
 import joblib
 import numpy as np
 from PIL import Image
 
-# ── Try importing TensorFlow quietly ──
-try:
-    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-    import tensorflow as tf
-    from tensorflow.keras.applications import InceptionResNetV2
-    from tensorflow.keras.applications.inception_resnet_v2 import preprocess_input
-    from tensorflow.keras.models import Model
-    TF_OK = True
-except Exception:
-    TF_OK = False
+import torch
+import timm
+from torchvision import transforms
 
 from skimage.feature import graycomatrix, graycoprops
 
@@ -77,25 +68,6 @@ def load_and_show_image(image_path):
     return img
 
 
-def build_extractor():
-    """Build InceptionResNetV2 feature extractor."""
-    print("\n  ⏳ Loading InceptionResNetV2...", end="", flush=True)
-    base  = InceptionResNetV2(weights="imagenet", include_top=True,
-                               input_shape=(299, 299, 3))
-    model = Model(inputs=base.input,
-                  outputs=base.get_layer("predictions").output)
-    model.trainable = False
-    print(" ✅ Ready")
-    return model
-
-
-def extract_deep(model, image_path):
-    img  = Image.open(image_path).convert("RGB").resize(IMG_SIZE)
-    arr  = np.array(img, dtype=np.float32)
-    batch = preprocess_input(np.expand_dims(arr, 0))
-    return model.predict(batch, verbose=0)[0]
-
-
 def extract_glcm(image_path):
     img = Image.open(image_path).convert("L").resize(IMG_SIZE)
     arr = (np.array(img) / 32).astype(np.uint8)
@@ -115,22 +87,55 @@ def extract_glcm(image_path):
     return np.array(features, dtype=np.float32)
 
 
-def predict(image_path, objective, extractor):
+def predict(image_path, objective, device):
     """Run prediction for one objective."""
-    clf_path = os.path.join(MODEL_DIR, f"rf_{objective}.joblib")
-    le_path  = os.path.join(MODEL_DIR, f"le_{objective}.joblib")
+    clf_path   = os.path.join(MODEL_DIR, f"rf_{objective}.joblib")
+    le_path    = os.path.join(MODEL_DIR, f"le_{objective}.joblib")
+    model_path = os.path.join(MODEL_DIR, f"model_{objective}.pth")
+    scaler_path = os.path.join(MODEL_DIR, f"scaler_{objective}.joblib")
+    pca_path   = os.path.join(MODEL_DIR, f"pca_{objective}.joblib")
 
-    if not os.path.exists(clf_path):
-        print(f"  ⚠️  Model not found: {clf_path}")
+    if not os.path.exists(clf_path) or not os.path.exists(model_path):
+        print(f"  ⚠️  Model artifacts not found: {clf_path} or {model_path}")
         return
 
     clf = joblib.load(clf_path)
     le  = joblib.load(le_path)
+    scaler = joblib.load(scaler_path)
+    pca = joblib.load(pca_path)
 
-    deep = extract_deep(extractor, image_path)
+    # Load fine-tuned PyTorch backbone
+    num_classes = len(le.classes_)
+    model = timm.create_model('inception_resnet_v2', pretrained=False, num_classes=num_classes)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.reset_classifier(0)
+    model = model.to(device)
+    model.eval()
+
+    # Preprocess image
+    img = Image.open(image_path).convert("RGB")
+    transform = transforms.Compose([
+        transforms.Resize(IMG_SIZE),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    tensor = transform(img).unsqueeze(0).to(device)
+
+    # Extract deep features
+    with torch.no_grad():
+        deep = model(tensor).cpu().numpy()[0]
+
+    # Extract GLCM features
     glcm = extract_glcm(image_path)
-    X    = np.hstack([deep, glcm]).reshape(1, -1)
 
+    # Apply PCA to deep features
+    deep_pca = pca.transform(deep.reshape(1, -1))
+
+    # Fuse features
+    X = np.hstack([deep_pca, glcm.reshape(1, -1)])
+    X = scaler.transform(X)
+
+    # Predict
     pred_idx   = clf.predict(X)[0]
     pred_proba = clf.predict_proba(X)[0]
     pred_label = le.inverse_transform([pred_idx])[0]
@@ -205,22 +210,20 @@ if __name__ == "__main__":
     banner("STEP 2 — Input Image")
     load_and_show_image(image_path)
 
-    # ── Load extractor ──
-    banner("STEP 3 — Extracting Features")
-    if not TF_OK:
-        print("  ❌ TensorFlow not available.")
-        sys.exit(1)
-
-    extractor = build_extractor()
-    print(f"  ✅ Deep features  : 1000-dimensional (InceptionResNetV2)")
+    # ── Setup device ──
+    banner("STEP 3 — PyTorch Setup & Extraction")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"  ✅ PyTorch Device : {device}")
+    print(f"  ✅ Deep features  : 1536-dimensional (Fine-tuned InceptionResNetV2)")
     print(f"  ✅ GLCM features  : 20-dimensional (4 angles × 5 stats)")
-    print(f"  ✅ Fused vector   : 1020-dimensional")
+    print(f"  ✅ PCA reduction  : 64 components")
+    print(f"  ✅ Fused vector   : 84-dimensional")
 
     # ── Run predictions ──
     banner("STEP 4 — Predictions")
 
-    predict(image_path, "informativeness", extractor)
-    predict(image_path, "damage",          extractor)
+    predict(image_path, "informativeness", device)
+    predict(image_path, "damage",          device)
 
     # ── Final summary ──
     banner("DEMO COMPLETE ✅", "═")

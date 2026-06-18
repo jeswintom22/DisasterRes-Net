@@ -28,12 +28,14 @@ saved_models/
 results/
 mlruns/
 
+
 # Model and binary artifacts
 *.joblib
 *.pkl
 *.h5
 *.pt
 *.pth
+*.npz
 
 # Logs and temp files
 *.log
