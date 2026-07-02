@@ -1,4 +1,12 @@
-"""Step 3: extract features, train XGBoost, evaluate, and save models."""
+"""Step 3: extract features using M1 architecture (paper: Gupta & Roy 2025).
+
+Architecture:
+  L1: IRv2 on original image → DF1 (1000-dim)
+  L2: IRv2 on saliency map  → DF2 (1000-dim)
+  L3: GLCM handcrafted      → HF  (20-dim)
+  Fusion: [DF1 | DF2 | HF] = 2020-dim (no PCA)
+  Classifier: Random Forest (not XGBoost)
+"""
 
 import json
 import os
@@ -12,7 +20,7 @@ import mlflow
 import mlflow.sklearn
 import numpy as np
 from PIL import Image, UnidentifiedImageError
-from xgboost import XGBClassifier
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     accuracy_score,
@@ -23,7 +31,6 @@ from sklearn.metrics import (
     recall_score,
 )
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.decomposition import PCA
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from skimage.feature import graycomatrix, graycoprops
 import pandas as pd
@@ -151,98 +158,201 @@ def get_transforms(train: bool = False):
         ])
 
 
-def finetune_extractor(train_paths: Sequence[str], y_train: np.ndarray, num_classes: int, objective: str):
-    if timm is None or torch is None:
-        return None
-    try:
-        model = timm.create_model('inception_resnet_v2', pretrained=True, num_classes=num_classes)
-        
-        # Freeze all parameters first
-        named_params = list(model.named_parameters())
-        for name, param in named_params:
-            param.requires_grad = False
-            
-        # Unfreeze the last 100 parameter tensors
-        for name, param in named_params[-100:]:
-            param.requires_grad = True
+def rgb_to_lms(img_rgb: np.ndarray) -> np.ndarray:
+    """Convert RGB image to LMS color space (paper step 1 of SUN model).
+    
+    Args:
+        img_rgb: RGB image (H, W, 3) with values in [0, 255]
+    
+    Returns:
+        LMS image (H, W, 3)
+    """
+    # Normalize to [0, 1]
+    img = img_rgb.astype(np.float32) / 255.0
+    
+    # Standard RGB to LMS transformation matrix
+    # (This is an approximation; exact matrix from Gupta & Roy may vary slightly)
+    rgb_to_lms_matrix = np.array([
+        [0.3, 0.622, 0.078],
+        [0.23, 0.692, 0.078],
+        [0.24342268924547819, 0.20476744424496821, 0.55314986650955360]
+    ])
+    
+    h, w = img_rgb.shape[:2]
+    img_flat = img.reshape(-1, 3)
+    lms_flat = img_flat @ rgb_to_lms_matrix.T
+    lms = lms_flat.reshape(h, w, 3)
+    
+    # Clip to avoid numerical issues
+    return np.clip(lms, 0, 1)
 
+
+def simple_saliency_map(img_rgb: np.ndarray) -> np.ndarray:
+    """Generate approximate saliency map using Laplacian contrast.
+    
+    This is a practical approximation of the SUN model. The exact SUN model
+    requires 361 pre-trained ICA filters from Kanan & Cottrell (2010), which
+    we document as a TODO.
+    
+    Args:
+        img_rgb: RGB image (H, W, 3) with values in [0, 255]
+    
+    Returns:
+        Saliency map (H, W) with values in [0, 1]
+    """
+    try:
+        # Convert to grayscale
+        img_gray = Image.fromarray(img_rgb.astype(np.uint8)).convert('L')
+        img_gray = np.asarray(img_gray, dtype=np.float32) / 255.0
+        
+        # Apply Laplacian for edge detection (high contrast → high saliency)
+        from scipy.ndimage import laplace
+        sal = np.abs(laplace(img_gray))
+        
+        # Normalize to [0, 1]
+        sal_min, sal_max = sal.min(), sal.max()
+        if sal_max > sal_min:
+            sal = (sal - sal_min) / (sal_max - sal_min)
+        else:
+            sal = np.zeros_like(sal)
+        
+        return sal
+    except Exception as exc:
+        print(f"[WARN] Saliency extraction failed: {exc}. Returning uniform saliency.")
+        return np.ones((img_rgb.shape[0], img_rgb.shape[1]), dtype=np.float32) * 0.5
+
+
+def saliency_to_rgb(saliency_map: np.ndarray) -> np.ndarray:
+    """Convert 2D saliency map to 3-channel RGB for model input.
+    
+    Args:
+        saliency_map: (H, W) saliency values in [0, 1]
+    
+    Returns:
+        (H, W, 3) RGB image in [0, 255]
+    """
+    # Replicate saliency across 3 channels
+    rgb_sal = np.stack([saliency_map, saliency_map, saliency_map], axis=2)
+    return (rgb_sal * 255).astype(np.uint8)
+
+
+def load_frozen_model(num_classes: int = 1000) -> Optional[torch.nn.Module]:
+    """Load frozen pretrained Inception-ResNet-V2 (paper's L1 & L2 source).
+    
+    The paper uses pretrained IRv2 without fine-tuning. This extracts features
+    from the predictions layer (1000-dim), not global average pooling.
+    
+    Args:
+        num_classes: Number of ImageNet classes (1000)
+    
+    Returns:
+        Model with forward hooks registered to capture predictions layer
+    """
+    if timm is None or torch is None:
+        print("[ERROR] PyTorch / timm not available")
+        return None
+    
+    try:
+        model = timm.create_model(
+            'inception_resnet_v2',
+            pretrained=True,
+            num_classes=num_classes
+        )
+        
+        # Freeze all parameters (no fine-tuning per paper)
+        for param in model.parameters():
+            param.requires_grad = False
+        
         device = get_device()
         model = model.to(device)
+        model.eval()
         
-        # Partition parameters for differential learning rates
-        backbone_params = []
-        head_params = []
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                if 'classif' in name or 'fc' in name:
-                    head_params.append(param)
-                else:
-                    backbone_params.append(param)
-                    
-        optimizer = torch.optim.Adam([
-            {'params': backbone_params, 'lr': 1e-5},
-            {'params': head_params, 'lr': 1e-4}
-        ])
-        criterion = nn.CrossEntropyLoss()
-        
-        transform = get_transforms(train=True)
-        dataset = DisasterDataset(train_paths, y_train, transform)
-        loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
-        
-        print(f"[INFO] Fine-tuning InceptionResNetV2 backbone for 5 epochs...")
-        model.train()
-        for epoch in range(5):
-            running_loss = 0.0
-            for imgs, labels in loader:
-                imgs = imgs.to(device)
-                labels = torch.tensor(labels, dtype=torch.long).to(device)
-                optimizer.zero_grad()
-                outputs = model(imgs)
-                loss = criterion(outputs, labels)
-                loss.backward()
-                optimizer.step()
-                running_loss += loss.item() * imgs.size(0)
-            epoch_loss = running_loss / len(dataset)
-            print(f"Epoch {epoch+1}/5 Loss: {epoch_loss:.4f}")
-            
-        os.makedirs(MODEL_DIR, exist_ok=True)
-        model_path = npath(MODEL_DIR, f"model_{objective}.pth")
-        torch.save(model.state_dict(), model_path)
-        print(f"[INFO] Saved fine-tuned PyTorch model to {model_path}")
-        
-        if objective == "informativeness":
-            compat_model_path = npath(MODEL_DIR, "model_disaster_type.pth")
-            torch.save(model.state_dict(), compat_model_path)
-            print(f"[INFO] Saved compatibility duplicate model to {compat_model_path}")
-
-        model.reset_classifier(0)
+        print("[INFO] Loaded frozen pretrained Inception-ResNet-V2")
         return model
     except Exception as exc:
-        print(f"[ERROR] Failed to fine-tune PyTorch model: {exc}")
+        print(f"[ERROR] Failed to load frozen model: {exc}")
         return None
 
 
-def extract_deep_features(model, image_paths: Sequence[str], batch_size: int = BATCH_SIZE) -> np.ndarray:
+def extract_features_predictions_layer(model, image_paths: Sequence[str], 
+                                       batch_size: int = BATCH_SIZE,
+                                       saliency_input: bool = False) -> np.ndarray:
+    """Extract 1000-dim features from IRv2 predictions layer (paper's L1/L2).
+    
+    This replaces the old extract_deep_features which used GAP (1536-dim).
+    The paper uses the predictions layer (1000-dim before softmax).
+    
+    Args:
+        model: Frozen pretrained Inception-ResNet-V2
+        image_paths: List of image file paths
+        batch_size: Batch size for extraction
+        saliency_input: If True, generate saliency map for each image first
+    
+    Returns:
+        Feature matrix (N, 1000)
+    """
+    if model is None:
+        print("[ERROR] Model is None, cannot extract features")
+        return np.zeros((len(image_paths), 1000), dtype=np.float32)
+    
     model.eval()
     transform = get_transforms(train=False)
-    dataset = DisasterDataset(image_paths, [0]*len(image_paths), transform)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)
-    
     device = get_device()
+    
+    # Hook to capture predictions layer output (1000-dim)
+    predictions_features = []
+    
+    def hook_fn(module, input, output):
+        predictions_features.append(output.detach().cpu().numpy())
+    
+    # Register hook on the classification layer
+    handle = model.classif.register_forward_hook(hook_fn)
+    
     features = []
-    with torch.no_grad():
-        for imgs, _ in tqdm(loader, desc="  Deep features"):
-            imgs = imgs.to(device)
-            try:
-                preds = model(imgs)
-                features.append(preds.cpu().numpy())
-            except Exception as exc:
-                print(f"[ERROR] Deep extraction failed: {exc}")
-                features.append(np.zeros((imgs.size(0), 1536), dtype=np.float32))
+    try:
+        for i in tqdm(range(0, len(image_paths), batch_size), desc="  L1/L2 features"):
+            batch_paths = image_paths[i:i+batch_size]
+            imgs_batch = []
+            
+            for path in batch_paths:
+                try:
+                    if saliency_input:
+                        # Load original image, compute saliency, convert to RGB
+                        with Image.open(path) as img:
+                            img_rgb = np.asarray(img.convert('RGB'), dtype=np.uint8)
+                        sal = simple_saliency_map(img_rgb)
+                        sal_rgb = saliency_to_rgb(sal)
+                        img_sal = Image.fromarray(sal_rgb)
+                        img_tensor = transform(img_sal)
+                    else:
+                        # Normal RGB image
+                        with Image.open(path) as img:
+                            img = img.convert("RGB")
+                        img_tensor = transform(img)
+                    
+                    imgs_batch.append(img_tensor)
+                except Exception as exc:
+                    print(f"[WARN] Failed to load '{path}': {exc}. Using zero tensor.")
+                    imgs_batch.append(torch.zeros((3, 299, 299), dtype=torch.float32))
+            
+            if imgs_batch:
+                imgs_tensor = torch.stack(imgs_batch).to(device)
+                predictions_features.clear()  # Clear previous batch
+                with torch.no_grad():
+                    _ = model(imgs_tensor)
                 
+                if predictions_features:
+                    batch_features = predictions_features[0]
+                    if batch_features.shape[1] != 1000:
+                        print(f"[WARN] Predictions layer output has {batch_features.shape[1]} dims, expected 1000")
+                    features.append(batch_features)
+    
+    finally:
+        handle.remove()
+    
     if features:
         return np.vstack(features)
-    return np.array([])
+    return np.zeros((len(image_paths), 1000), dtype=np.float32)
 
 
 def extract_glcm_features(image_path: str) -> np.ndarray:
@@ -388,7 +498,7 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         return None
 
     print("\n" + "=" * 70)
-    print(f"STEP 3 - Objective: {objective}")
+    print(f"STEP 3 - M1 Module (Paper: Gupta & Roy 2025) - Objective: {objective}")
     print("=" * 70)
 
     train_paths, train_labels = load_split("train", objective)
@@ -402,52 +512,69 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
     y_train = le.fit_transform(train_labels)
     y_test = le.transform(test_labels)
 
-    extractor = finetune_extractor(train_paths, y_train, len(le.classes_), objective)
-    if extractor is None:
-        print("[ERROR] Feature extractor unavailable or fine-tuning failed.")
+    # Load frozen IRv2 models (L1 for original, L2 for saliency)
+    print("\n[STEP] Loading frozen pretrained Inception-ResNet-V2 for L1 (original image)")
+    model_l1 = load_frozen_model(num_classes=1000)
+    if model_l1 is None:
+        print("[ERROR] Could not load L1 feature extractor")
+        return None
+    
+    print("[STEP] Loading second frozen pretrained Inception-ResNet-V2 for L2 (saliency)")
+    model_l2 = load_frozen_model(num_classes=1000)
+    if model_l2 is None:
+        print("[ERROR] Could not load L2 feature extractor")
         return None
 
-    deep_train = extract_deep_features(extractor, train_paths)
-    deep_test = extract_deep_features(extractor, test_paths)
+    # Extract L1 features (original images)
+    print(f"\n[STEP] Extracting L1 features (original images) - DF1 (1000-dim)")
+    df1_train = extract_features_predictions_layer(model_l1, train_paths, saliency_input=False)
+    df1_test = extract_features_predictions_layer(model_l1, test_paths, saliency_input=False)
+    print(f"  DF1 train shape: {df1_train.shape}, DF1 test shape: {df1_test.shape}")
     
-    # Free up GPU memory
-    del extractor
+    # Extract L2 features (saliency maps)
+    print(f"[STEP] Extracting L2 features (saliency maps) - DF2 (1000-dim)")
+    df2_train = extract_features_predictions_layer(model_l2, train_paths, saliency_input=True)
+    df2_test = extract_features_predictions_layer(model_l2, test_paths, saliency_input=True)
+    print(f"  DF2 train shape: {df2_train.shape}, DF2 test shape: {df2_test.shape}")
+    
+    # Free GPU memory
+    del model_l1, model_l2
     if torch is not None and torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    # Extract L3 handcrafted features (GLCM)
+    print(f"[STEP] Extracting L3 handcrafted features (GLCM) - HF (20-dim)")
     glcm_train = extract_all_glcm(train_paths)
     glcm_test = extract_all_glcm(test_paths)
+    print(f"  GLCM train shape: {glcm_train.shape}, GLCM test shape: {glcm_test.shape}")
 
-    if deep_train.shape[1] != 1536:
-        print(f"[WARN] Deep feature dim is {deep_train.shape[1]}, expected 1536.")
-    if glcm_train.shape[1] != 20:
-        print(f"[WARN] GLCM feature dim is {glcm_train.shape[1]}, expected 20.")
-
-    print("[INFO] Applying PCA to deep features (1536 -> 64)")
-    pca = PCA(n_components=64, random_state=42)
-    deep_train_pca = pca.fit_transform(deep_train)
-    deep_test_pca = pca.transform(deep_test)
-
-    x_train = np.hstack([deep_train_pca, glcm_train])
-    x_test = np.hstack([deep_test_pca, glcm_test])
-
+    # Fuse features: [DF1 | DF2 | HF] = 2020-dim (no PCA per paper)
+    print(f"\n[STEP] Fusing features: [DF1(1000) | DF2(1000) | HF(20)] = 2020-dim")
+    x_train = np.hstack([df1_train, df2_train, glcm_train])
+    x_test = np.hstack([df1_test, df2_test, glcm_test])
+    print(f"  Fused train shape: {x_train.shape}")
+    print(f"  Fused test shape:  {x_test.shape}")
+    
+    # Normalize (StandardScaler on fused features)
+    print(f"[STEP] Normalizing fused features")
     scaler = StandardScaler()
     x_train = scaler.fit_transform(x_train)
     x_test = scaler.transform(x_test)
-    print(f"[INFO] Fused feature shape train: {x_train.shape} (normalized)")
-    print(f"[INFO] Fused feature shape test : {x_test.shape} (normalized)")
+    print(f"  Normalized train shape: {x_train.shape}")
+    print(f"  Normalized test shape:  {x_test.shape}")
 
+    # Train Random Forest (per paper, best classifier)
+    print(f"\n[STEP] Training Random Forest classifier (per paper, best performer)")
     mlflow.set_tracking_uri("sqlite:///mlflow.db")
-    mlflow.set_experiment("DisasterRes-Net")
+    mlflow.set_experiment("DisasterRes-Net-M1-Paper")
+    
     with mlflow.start_run(run_name=f"rf_{objective}"):
-        clf = XGBClassifier(
-            n_estimators=300,
-            max_depth=6,
-            learning_rate=0.05,
-            eval_metric='mlogloss',
-            tree_method='hist',
+        clf = RandomForestClassifier(
+            n_estimators=100,
+            max_features='sqrt',
+            random_state=42,
             n_jobs=-1,
-            random_state=42
+            verbose=1
         )
         
         print("[INFO] Running Stratified K-Fold Cross Validation (5 folds)...")
@@ -460,7 +587,7 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         try:
             clf.fit(x_train, y_train)
         except Exception as exc:
-            print(f"[ERROR] XGBoost training failed: {exc}")
+            print(f"[ERROR] Random Forest training failed: {exc}")
             return None
     
         y_pred = clf.predict(x_test)
@@ -470,7 +597,7 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         f1 = float(f1_score(y_test, y_pred, average="weighted", zero_division=0))
         cm = confusion_matrix(y_test, y_pred)
     
-        print(f"[RESULT] Test accuracy={acc:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}")
+        print(f"\n[RESULT] Test accuracy={acc:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}")
         print("[REPORT]")
         print(classification_report(y_test, y_pred, target_names=le.classes_, zero_division=0))
     
@@ -479,26 +606,27 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         model_path = npath(MODEL_DIR, f"rf_{objective}.joblib")
         encoder_path = npath(MODEL_DIR, f"le_{objective}.joblib")
         scaler_path = npath(MODEL_DIR, f"scaler_{objective}.joblib")
-        pca_path = npath(MODEL_DIR, f"pca_{objective}.joblib")
         try:
             joblib.dump(clf, model_path)
             joblib.dump(le, encoder_path)
+            joblib.dump(scaler, scaler_path)
+            
             if objective == "informativeness":
                 compat_encoder_path = npath(MODEL_DIR, "le_disaster_type.joblib")
                 joblib.dump(le, compat_encoder_path)
                 print(f"[INFO] Saved compatibility duplicate label encoder to {compat_encoder_path}")
-            joblib.dump(scaler, scaler_path)
-            joblib.dump(pca, pca_path)
         except OSError as exc:
             print(f"[ERROR] Failed saving model artifacts: {exc}")
             return None
 
-        pca_names = [f"deep_pca_{i+1}" for i in range(64)]
+        # Feature importance (only meaningful for tree-based models)
+        df1_names = [f"df1_{i+1}" for i in range(1000)]
+        df2_names = [f"df2_{i+1}" for i in range(1000)]
         glcm_names = []
         for ang in ["0", "45", "90", "135"]:
             for prop in ["contrast", "correlation", "energy", "homogeneity", "entropy"]:
                 glcm_names.append(f"glcm_{prop}_{ang}")
-        feature_names = pca_names + glcm_names
+        feature_names = df1_names + df2_names + glcm_names
         
         importances_df = pd.DataFrame({
             "feature": feature_names,
@@ -519,17 +647,23 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
             "train_images": float(len(train_paths)),
             "test_images": float(len(test_paths)),
             "feature_dim": float(x_train.shape[1]),
+            "classifier": "RandomForest",
+            "architecture": "M1_Paper",
+            "l1_dim": 1000,
+            "l2_dim": 1000,
+            "l3_dim": 20,
         }
         metrics_path = _save_metrics_json(objective, metrics)
         
         mlflow.log_param("objective", objective)
         mlflow.log_params({
-            "n_estimators": 300,
-            "max_depth": 6,
-            "learning_rate": 0.05,
-            "tree_method": "hist",
+            "n_estimators": 100,
+            "max_features": "sqrt",
             "random_state": 42,
-            "pca_components": 32
+            "classifier": "RandomForestClassifier",
+            "architecture": "M1-Paper",
+            "fusion_dim": 2020,
+            "pca_applied": False,
         })
         mlflow.log_metrics({
             "accuracy": acc,
@@ -542,19 +676,17 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
             "test_images": float(len(test_paths)),
             "feature_dim": float(x_train.shape[1])
         })
-        mlflow.sklearn.log_model(clf, f"xgb_model_{objective}")
+        mlflow.sklearn.log_model(clf, f"rf_model_{objective}")
         mlflow.log_artifact(encoder_path)
         mlflow.log_artifact(scaler_path)
-        mlflow.log_artifact(pca_path)
         if cm_path:
             mlflow.log_artifact(cm_path)
         mlflow.log_artifact(importances_path)
         mlflow.log_artifact(metrics_path)
     
-        print(f"[INFO] Model saved: {model_path}")
+        print(f"\n[INFO] Model saved: {model_path}")
         print(f"[INFO] Label encoder saved: {encoder_path}")
         print(f"[INFO] Scaler saved: {scaler_path}")
-        print(f"[INFO] PCA saved: {pca_path}")
         print(f"[INFO] Feature importances saved: {importances_path}")
         if cm_path:
             print(f"[INFO] Confusion matrix saved: {cm_path}")
