@@ -167,15 +167,31 @@ def extract_all_glcm(image_paths: Sequence[str]) -> np.ndarray:
     return feats
 
 
-def load_deep_features(image_paths: Sequence[str], split: str = "test") -> Optional[np.ndarray]:
-    """Load pre-extracted deep features from M1 module if available.
-    
-    Falls back to dummy features if not available.
-    """
-    # TODO: Implement proper loading from step3 cached features
-    # For now, return None to skip deep feature evaluation
-    print("  [INFO] Deep features not cached; skipping learned feature baseline")
-    return None
+def load_deep_features(objective: str, image_paths: Sequence[str], split: str = "test") -> Optional[np.ndarray]:
+    """Load cached deep features from step3's PyTorch extraction pipeline."""
+    cache_path = npath(_GLCM_CACHE_DIR, "feature_cache", f"{objective}_{split}_features.npz")
+    if not os.path.exists(cache_path):
+        print(f"  [INFO] Deep feature cache not found: {cache_path}")
+        return None
+
+    try:
+        data = np.load(cache_path, allow_pickle=True)
+        cached_paths = data["image_paths"].tolist()
+        cached_path_to_idx = {path: idx for idx, path in enumerate(cached_paths)}
+        try:
+            reorder = [cached_path_to_idx[path] for path in image_paths]
+        except KeyError:
+            print(f"  [WARN] Some paths not found in deep feature cache for {objective}/{split}; skipping.")
+            return None
+
+        df1 = data["df1"][reorder]
+        df2 = data["df2"][reorder]
+        deep = np.hstack([df1, df2])
+        print(f"  [INFO] Loaded cached deep features from {cache_path} with shape {deep.shape}")
+        return deep
+    except Exception as exc:
+        print(f"  [WARN] Failed to load deep feature cache '{cache_path}': {exc}")
+        return None
 
 
 def _infer_label_map(objective: str, split_dir: str) -> Dict[str, str]:
@@ -315,8 +331,8 @@ def run_baseline_comparison(objective: str) -> Optional[Dict[str, Dict]]:
     
     # Try to load deep features (from step3)
     print(f"  Loading deep features (1000-dim)...")
-    deep_train = load_deep_features(train_paths, split="train")
-    deep_test = load_deep_features(test_paths, split="test")
+    deep_train = load_deep_features(objective, train_paths, split="train")
+    deep_test = load_deep_features(objective, test_paths, split="test")
     
     # Evaluate feature sets
     all_results = {}
