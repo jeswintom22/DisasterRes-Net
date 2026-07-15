@@ -11,8 +11,8 @@ It performs three stages:
 
 - step1_collect_data.py: Collects and organizes images into class folders.
 - step2_preprocess.py: Removes duplicates, resizes images to 299x299, and creates a 70/30 split.
-- step3_classify.py: Extracts InceptionResNetV2 and GLCM features, trains Random Forest, evaluates metrics.
-- demo.py: Runs a live single-image prediction demo.
+- step3_classify.py: Extracts InceptionResNetV2, GLCM, LBP, and saliency features, trains Random Forest, evaluates metrics.
+- demo.py: Runs a live single-image prediction demo with the same fused feature pipeline.
 - run_all.py: Executes step1 -> step2 -> validation -> step3 as a full pipeline.
 
 Primary data folders:
@@ -51,6 +51,16 @@ python demo.py
 - saved_models contains trained joblib model files.
 - results contains confusion matrices and objective metrics.
 - split_dataset/train and split_dataset/test contain ready-to-train images.
+
+## Feature Extraction Details
+
+`step3_classify.py` now fuses:
+- deep features from InceptionResNetV2 reduced to 64 PCA components
+- GLCM texture features (20 dimensions)
+- LBP texture histogram features (10 dimensions)
+- saliency summary features (8 dimensions)
+
+`demo.py` uses the same feature fusion path for live single-image prediction.
 
 ## Notes
 

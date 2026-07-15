@@ -20,7 +20,9 @@ import torch
 import timm
 from torchvision import transforms
 
-from skimage.feature import graycomatrix, graycoprops
+from skimage.filters import sobel
+from skimage.feature import graycomatrix, graycoprops, local_binary_pattern
+from skimage.measure import shannon_entropy
 
 IMG_SIZE    = (299, 299)
 MODEL_DIR   = "saved_models"
@@ -87,6 +89,29 @@ def extract_glcm(image_path):
     return np.array(features, dtype=np.float32)
 
 
+def extract_lbp(image_path):
+    img = Image.open(image_path).convert("L").resize(IMG_SIZE)
+    arr = (np.array(img) / 32).astype(np.uint8)
+    arr = np.clip(arr, 0, 7)
+    lbp = local_binary_pattern(arr, P=8, R=1, method="uniform")
+    hist, _ = np.histogram(lbp.ravel(), bins=10, range=(0, 10), density=True)
+    return hist.astype(np.float32)
+
+
+def extract_saliency(image_path):
+    img = Image.open(image_path).convert("L").resize(IMG_SIZE)
+    arr = np.asarray(img).astype(np.float32) / 255.0
+    saliency = sobel(arr)
+    mean = float(saliency.mean())
+    std = float(saliency.std())
+    mx = float(saliency.max())
+    thresh = np.percentile(saliency, 90)
+    high_frac = float((saliency > thresh).mean())
+    ent = float(shannon_entropy(saliency))
+    hist, _ = np.histogram(saliency, bins=2, range=(0.0, 1.0), density=True)
+    return np.asarray([mean, std, mx, high_frac, ent, hist[0], hist[1], thresh], dtype=np.float32)
+
+
 def predict(image_path, objective, device):
     """Run prediction for one objective."""
     clf_path   = os.path.join(MODEL_DIR, f"rf_{objective}.joblib")
@@ -131,8 +156,12 @@ def predict(image_path, objective, device):
     # Apply PCA to deep features
     deep_pca = pca.transform(deep.reshape(1, -1))
 
+    # Extract additional handcrafted features
+    lbp = extract_lbp(image_path)
+    saliency = extract_saliency(image_path)
+
     # Fuse features
-    X = np.hstack([deep_pca, glcm.reshape(1, -1)])
+    X = np.hstack([deep_pca, glcm.reshape(1, -1), lbp.reshape(1, -1), saliency.reshape(1, -1)])
     X = scaler.transform(X)
 
     # Predict

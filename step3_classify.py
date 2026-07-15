@@ -8,10 +8,14 @@ import hashlib
 import concurrent.futures
 
 import joblib
-import mlflow
-import mlflow.sklearn
 import numpy as np
 from PIL import Image, UnidentifiedImageError
+
+try:
+    import mlflow
+    import mlflow.sklearn
+except Exception:
+    mlflow = None
 from xgboost import XGBClassifier
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
@@ -24,8 +28,11 @@ from sklearn.metrics import (
 )
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.decomposition import PCA
+from contextlib import nullcontext
 from sklearn.model_selection import StratifiedKFold, cross_val_score
-from skimage.feature import graycomatrix, graycoprops
+from skimage.filters import sobel
+from skimage.feature import graycomatrix, graycoprops, local_binary_pattern
+from skimage.measure import shannon_entropy
 import pandas as pd
 from tqdm import tqdm
 
@@ -276,6 +283,44 @@ def extract_glcm_features(image_path: str) -> np.ndarray:
     return np.asarray(out, dtype=np.float32)
 
 
+def extract_lbp_features(image_path: str) -> np.ndarray:
+    try:
+        with Image.open(image_path) as img:
+            img = img.convert("L")
+            img = img.resize(IMG_SIZE, Image.Resampling.LANCZOS)
+            arr = np.asarray(img)
+    except (UnidentifiedImageError, OSError) as exc:
+        print(f"[WARN] Could not read image for LBP '{image_path}': {exc}")
+        return np.zeros(10, dtype=np.float32)
+
+    arr = (arr / 32).astype(np.uint8)
+    arr = np.clip(arr, 0, 7)
+    lbp = local_binary_pattern(arr, P=8, R=1, method="uniform")
+    hist, _ = np.histogram(lbp.ravel(), bins=10, range=(0, 10), density=True)
+    return hist.astype(np.float32)
+
+
+def extract_saliency_features(image_path: str) -> np.ndarray:
+    try:
+        with Image.open(image_path) as img:
+            img = img.convert("L")
+            img = img.resize(IMG_SIZE, Image.Resampling.LANCZOS)
+            arr = np.asarray(img).astype(np.float32) / 255.0
+    except (UnidentifiedImageError, OSError) as exc:
+        print(f"[WARN] Could not read image for saliency '{image_path}': {exc}")
+        return np.zeros(8, dtype=np.float32)
+
+    saliency = sobel(arr)
+    mean = float(saliency.mean())
+    std = float(saliency.std())
+    mx = float(saliency.max())
+    thresh = np.percentile(saliency, 90)
+    high_frac = float((saliency > thresh).mean())
+    ent = float(shannon_entropy(saliency))
+    hist, _ = np.histogram(saliency, bins=2, range=(0.0, 1.0), density=True)
+    return np.asarray([mean, std, mx, high_frac, ent, hist[0], hist[1], thresh], dtype=np.float32)
+
+
 def extract_all_glcm(image_paths: Sequence[str]) -> np.ndarray:
     hasher = hashlib.md5()
     for pth in image_paths:
@@ -311,6 +356,44 @@ def extract_all_glcm(image_paths: Sequence[str]) -> np.ndarray:
     
     np.savez_compressed(cache_file, feats)
     return feats
+
+
+def _extract_feature_cache(image_paths: Sequence[str], extractor, cache_suffix: str) -> np.ndarray:
+    hasher = hashlib.md5()
+    for pth in image_paths:
+        try:
+            mtime = os.path.getmtime(pth)
+            hasher.update(f"{pth}_{mtime}".encode('utf-8'))
+        except OSError:
+            hasher.update(pth.encode('utf-8'))
+
+    cache_key = hasher.hexdigest()
+    cache_file = npath(GLCM_CACHE_DIR, f"{cache_suffix}_{cache_key}.npz")
+    if os.path.exists(cache_file):
+        print(f"[INFO] Loading {cache_suffix.upper()} features from cache: {cache_file}")
+        data = np.load(cache_file)
+        return data['arr_0']
+
+    print(f"[INFO] Extracting {cache_suffix.upper()} features in parallel...")
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+    workers = min(8, os.cpu_count() or 1)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+        results = list(tqdm(executor.map(extractor, image_paths), total=len(image_paths), desc=f"  {cache_suffix.upper()} features"))
+    feats = np.asarray(results, dtype=np.float32)
+    np.savez_compressed(cache_file, feats)
+    return feats
+
+
+def extract_all_lbp(image_paths: Sequence[str]) -> np.ndarray:
+    return _extract_feature_cache(image_paths, extract_lbp_features, "lbp")
+
+
+def extract_all_saliency(image_paths: Sequence[str]) -> np.ndarray:
+    return _extract_feature_cache(image_paths, extract_saliency_features, "saliency")
 
 
 def _infer_label_map(objective: str, split_dir: str) -> Dict[str, str]:
@@ -417,19 +500,27 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
 
     glcm_train = extract_all_glcm(train_paths)
     glcm_test = extract_all_glcm(test_paths)
+    lbp_train = extract_all_lbp(train_paths)
+    lbp_test = extract_all_lbp(test_paths)
+    saliency_train = extract_all_saliency(train_paths)
+    saliency_test = extract_all_saliency(test_paths)
 
     if deep_train.shape[1] != 1536:
         print(f"[WARN] Deep feature dim is {deep_train.shape[1]}, expected 1536.")
     if glcm_train.shape[1] != 20:
         print(f"[WARN] GLCM feature dim is {glcm_train.shape[1]}, expected 20.")
+    if lbp_train.shape[1] != 10:
+        print(f"[WARN] LBP feature dim is {lbp_train.shape[1]}, expected 10.")
+    if saliency_train.shape[1] != 8:
+        print(f"[WARN] Saliency feature dim is {saliency_train.shape[1]}, expected 8.")
 
     print("[INFO] Applying PCA to deep features (1536 -> 64)")
     pca = PCA(n_components=64, random_state=42)
     deep_train_pca = pca.fit_transform(deep_train)
     deep_test_pca = pca.transform(deep_test)
 
-    x_train = np.hstack([deep_train_pca, glcm_train])
-    x_test = np.hstack([deep_test_pca, glcm_test])
+    x_train = np.hstack([deep_train_pca, glcm_train, lbp_train, saliency_train])
+    x_test = np.hstack([deep_test_pca, glcm_test, lbp_test, saliency_test])
 
     scaler = StandardScaler()
     x_train = scaler.fit_transform(x_train)
@@ -437,9 +528,14 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
     print(f"[INFO] Fused feature shape train: {x_train.shape} (normalized)")
     print(f"[INFO] Fused feature shape test : {x_test.shape} (normalized)")
 
-    mlflow.set_tracking_uri("sqlite:///mlflow.db")
-    mlflow.set_experiment("DisasterRes-Net")
-    with mlflow.start_run(run_name=f"rf_{objective}"):
+    if mlflow is not None:
+        mlflow.set_tracking_uri("sqlite:///mlflow.db")
+        mlflow.set_experiment("DisasterRes-Net")
+        mlflow_context = mlflow.start_run(run_name=f"rf_{objective}")
+    else:
+        mlflow_context = nullcontext()
+
+    with mlflow_context:
         clf = XGBClassifier(
             n_estimators=300,
             max_depth=6,
@@ -498,7 +594,18 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         for ang in ["0", "45", "90", "135"]:
             for prop in ["contrast", "correlation", "energy", "homogeneity", "entropy"]:
                 glcm_names.append(f"glcm_{prop}_{ang}")
-        feature_names = pca_names + glcm_names
+        lbp_names = [f"lbp_uniform_{i}" for i in range(10)]
+        saliency_names = [
+            "saliency_mean",
+            "saliency_std",
+            "saliency_max",
+            "saliency_high_frac",
+            "saliency_entropy",
+            "saliency_hist_0",
+            "saliency_hist_1",
+            "saliency_thresh_90"
+        ]
+        feature_names = pca_names + glcm_names + lbp_names + saliency_names
         
         importances_df = pd.DataFrame({
             "feature": feature_names,
@@ -522,34 +629,35 @@ def train_and_evaluate(objective: str) -> Optional[Dict[str, float]]:
         }
         metrics_path = _save_metrics_json(objective, metrics)
         
-        mlflow.log_param("objective", objective)
-        mlflow.log_params({
-            "n_estimators": 300,
-            "max_depth": 6,
-            "learning_rate": 0.05,
-            "tree_method": "hist",
-            "random_state": 42,
-            "pca_components": 32
-        })
-        mlflow.log_metrics({
-            "accuracy": acc,
-            "precision": precision,
-            "recall": recall,
-            "f1": f1,
-            "cv_accuracy_mean": cv_mean,
-            "cv_accuracy_std": cv_std,
-            "train_images": float(len(train_paths)),
-            "test_images": float(len(test_paths)),
-            "feature_dim": float(x_train.shape[1])
-        })
-        mlflow.sklearn.log_model(clf, f"xgb_model_{objective}")
-        mlflow.log_artifact(encoder_path)
-        mlflow.log_artifact(scaler_path)
-        mlflow.log_artifact(pca_path)
-        if cm_path:
-            mlflow.log_artifact(cm_path)
-        mlflow.log_artifact(importances_path)
-        mlflow.log_artifact(metrics_path)
+        if mlflow is not None:
+            mlflow.log_param("objective", objective)
+            mlflow.log_params({
+                "n_estimators": 300,
+                "max_depth": 6,
+                "learning_rate": 0.05,
+                "tree_method": "hist",
+                "random_state": 42,
+                "pca_components": 32
+            })
+            mlflow.log_metrics({
+                "accuracy": acc,
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+                "cv_accuracy_mean": cv_mean,
+                "cv_accuracy_std": cv_std,
+                "train_images": float(len(train_paths)),
+                "test_images": float(len(test_paths)),
+                "feature_dim": float(x_train.shape[1])
+            })
+            mlflow.sklearn.log_model(clf, f"xgb_model_{objective}")
+            mlflow.log_artifact(encoder_path)
+            mlflow.log_artifact(scaler_path)
+            mlflow.log_artifact(pca_path)
+            if cm_path:
+                mlflow.log_artifact(cm_path)
+            mlflow.log_artifact(importances_path)
+            mlflow.log_artifact(metrics_path)
     
         print(f"[INFO] Model saved: {model_path}")
         print(f"[INFO] Label encoder saved: {encoder_path}")
