@@ -67,6 +67,9 @@ def predict():
                 }
             except Exception as exc:
                 results[objective] = {"error": str(exc)}
+
+        if "informativeness" in results and "disaster_type" not in results:
+            results["disaster_type"] = results["informativeness"]
     finally:
         try:
             os.remove(temp_input)

@@ -3,8 +3,9 @@
 Architecture:
   L1: IRv2 on original image -> DF1 (1000-dim ImageNet logits)
   L2: IRv2 on saliency map   -> DF2 (1000-dim ImageNet logits)
-  L3: GLCM handcrafted       -> HF  (20-dim)
-  Fusion: [DF1 | DF2 | HF]   = 2020-dim
+    L3: GLCM handcrafted       -> HF  (20-dim)
+    L4: LBP texture histogram   -> LT  (10-dim)
+    Fusion: [DF1 | DF2 | HF | LT] = 2030-dim
   Classifier: Random Forest
 
 This module is now PyTorch-first for all deep-model work while preserving the
@@ -41,7 +42,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
-from skimage.feature import graycomatrix, graycoprops
+from skimage.feature import graycomatrix, graycoprops, local_binary_pattern
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
@@ -92,6 +93,10 @@ OBJECTIVES = ("informativeness", "damage")
 IMG_EXTS = (".jpg", ".jpeg", ".png")
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
+LBP_POINTS = 8
+LBP_RADIUS = 1
+LBP_METHOD = "uniform"
+FEATURE_PIPELINE = "df1_df2_glcm_lbp"
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(RESULT_DIR, exist_ok=True)
@@ -689,6 +694,29 @@ def extract_glcm_features(image_path: str) -> np.ndarray:
     return np.asarray(out, dtype=np.float32)
 
 
+def extract_lbp_features(image_path: str) -> np.ndarray:
+    try:
+        with Image.open(image_path) as img:
+            img = img.convert("L")
+            img = img.resize(IMG_SIZE, Image.Resampling.LANCZOS)
+            arr = np.asarray(img)
+    except UnidentifiedImageError as exc:
+        print(f"[WARN] Corrupt image skipped in LBP: '{image_path}'. Reason: {exc}")
+        return np.zeros(LBP_POINTS + 2, dtype=np.float32)
+    except OSError as exc:
+        print(f"[WARN] Could not read image for LBP '{image_path}': {exc}")
+        return np.zeros(LBP_POINTS + 2, dtype=np.float32)
+
+    lbp = local_binary_pattern(arr, LBP_POINTS, LBP_RADIUS, method=LBP_METHOD)
+    hist, _ = np.histogram(
+        lbp.ravel(),
+        bins=np.arange(0, LBP_POINTS + 3),
+        range=(0, LBP_POINTS + 2),
+        density=True,
+    )
+    return hist.astype(np.float32)
+
+
 def extract_all_glcm(image_paths: Sequence[str]) -> np.ndarray:
     hasher = hashlib.md5()
     for pth in image_paths:
@@ -716,6 +744,39 @@ def extract_all_glcm(image_paths: Sequence[str]) -> np.ndarray:
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
         results = list(
             tqdm(executor.map(extract_glcm_features, image_paths), total=len(image_paths), desc="  GLCM features")
+        )
+    feats = np.asarray(results, dtype=np.float32)
+    np.savez_compressed(cache_file, feats)
+    return feats
+
+
+def extract_all_lbp(image_paths: Sequence[str]) -> np.ndarray:
+    hasher = hashlib.md5()
+    for pth in image_paths:
+        try:
+            mtime = os.path.getmtime(pth)
+            hasher.update(f"{pth}_{mtime}".encode("utf-8"))
+        except OSError:
+            hasher.update(pth.encode("utf-8"))
+
+    cache_key = hasher.hexdigest()
+    cache_file = npath(GLCM_CACHE_DIR, f"lbp_{cache_key}.npz")
+
+    if os.path.exists(cache_file):
+        print(f"[INFO] Loading LBP features from cache: {cache_file}")
+        data = np.load(cache_file)
+        return data["arr_0"]
+
+    print("[INFO] Extracting LBP features in parallel...")
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+    workers = min(8, os.cpu_count() or 1)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+        results = list(
+            tqdm(executor.map(extract_lbp_features, image_paths), total=len(image_paths), desc="  LBP features")
         )
     feats = np.asarray(results, dtype=np.float32)
     np.savez_compressed(cache_file, feats)
@@ -792,7 +853,7 @@ def _save_confusion_plot(cm: np.ndarray, labels: Sequence[str], objective: str) 
 
 
 def _feature_cache_path(objective: str, split: str) -> str:
-    return npath(FEATURE_CACHE_DIR, f"{objective}_{split}_features.npz")
+    return npath(FEATURE_CACHE_DIR, f"{objective}_{split}_{FEATURE_PIPELINE}_features.npz")
 
 
 def save_feature_cache(
@@ -803,6 +864,7 @@ def save_feature_cache(
     df1: np.ndarray,
     df2: np.ndarray,
     glcm: np.ndarray,
+    lbp: Optional[np.ndarray],
     fused: np.ndarray,
 ) -> str:
     out_path = _feature_cache_path(objective, split)
@@ -813,13 +875,19 @@ def save_feature_cache(
         df1=df1.astype(np.float32),
         df2=df2.astype(np.float32),
         glcm=glcm.astype(np.float32),
+        lbp=np.asarray(lbp, dtype=np.float32) if lbp is not None else np.zeros((len(image_paths), 0), dtype=np.float32),
         fused=fused.astype(np.float32),
     )
     return out_path
 
 
-def load_cached_feature_matrix(objective: str, split: str, feature_set: str = "fused") -> Optional[np.ndarray]:
-    cache_path = _feature_cache_path(objective, split)
+def load_cached_feature_matrix(
+    objective: str,
+    split: str,
+    feature_set: str = "fused",
+    feature_pipeline: str = FEATURE_PIPELINE,
+) -> Optional[np.ndarray]:
+    cache_path = npath(FEATURE_CACHE_DIR, f"{objective}_{split}_{feature_pipeline}_features.npz")
     if not os.path.exists(cache_path):
         return None
     data = np.load(cache_path, allow_pickle=True)
@@ -840,12 +908,20 @@ def _load_shared_feature_models() -> Tuple[torch.nn.Module, torch.nn.Module]:
 
 
 def _load_rf_bundle(objective: str):
-    clf_path = npath(MODEL_DIR, f"rf_{objective}.joblib")
-    le_path = npath(MODEL_DIR, f"le_{objective}.joblib")
-    scaler_path = npath(MODEL_DIR, f"scaler_{objective}.joblib")
-    if not (os.path.exists(clf_path) and os.path.exists(le_path) and os.path.exists(scaler_path)):
-        raise FileNotFoundError(f"Missing inference artifacts for objective '{objective}'")
-    return joblib.load(clf_path), joblib.load(le_path), joblib.load(scaler_path)
+    candidates = [
+        (npath(MODEL_DIR, f"rf_{objective}_{FEATURE_PIPELINE}.joblib"),
+         npath(MODEL_DIR, f"le_{objective}_{FEATURE_PIPELINE}.joblib"),
+         npath(MODEL_DIR, f"scaler_{objective}_{FEATURE_PIPELINE}.joblib"),
+         FEATURE_PIPELINE),
+        (npath(MODEL_DIR, f"rf_{objective}.joblib"),
+         npath(MODEL_DIR, f"le_{objective}.joblib"),
+         npath(MODEL_DIR, f"scaler_{objective}.joblib"),
+         "df1_df2_glcm"),
+    ]
+    for clf_path, le_path, scaler_path, pipeline in candidates:
+        if os.path.exists(clf_path) and os.path.exists(le_path) and os.path.exists(scaler_path):
+            return joblib.load(clf_path), joblib.load(le_path), joblib.load(scaler_path), pipeline
+    raise FileNotFoundError(f"Missing inference artifacts for objective '{objective}'")
 
 
 def predict_image(image_path: str, objective: str) -> Dict[str, object]:
@@ -853,13 +929,17 @@ def predict_image(image_path: str, objective: str) -> Dict[str, object]:
     if objective not in OBJECTIVES:
         raise ValueError(f"Unknown objective '{objective}'")
 
-    clf, le, scaler = _load_rf_bundle(objective)
+    clf, le, scaler, feature_pipeline = _load_rf_bundle(objective)
     model_l1, model_l2 = _load_shared_feature_models()
 
     df1 = extract_features_predictions_layer(model_l1, [image_path], batch_size=1, saliency_input=False)
     df2 = extract_features_predictions_layer(model_l2, [image_path], batch_size=1, saliency_input=True)
     glcm = np.asarray([extract_glcm_features(image_path)], dtype=np.float32)
-    fused = np.hstack([df1, df2, glcm])
+    if feature_pipeline == FEATURE_PIPELINE:
+        lbp = np.asarray([extract_lbp_features(image_path)], dtype=np.float32)
+        fused = np.hstack([df1, df2, glcm, lbp])
+    else:
+        fused = np.hstack([df1, df2, glcm])
     fused_scaled = scaler.transform(fused)
 
     pred_idx = int(clf.predict(fused_scaled)[0])
@@ -911,7 +991,7 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
                 "framework": "pytorch+sklearn",
                 "objective": objective,
                 "backbone": "timm/inception_resnet_v2",
-                "feature_pipeline": "df1_df2_glcm",
+                "feature_pipeline": FEATURE_PIPELINE,
             }
         )
 
@@ -940,14 +1020,39 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
         glcm_test = extract_all_glcm(test_paths)
         print(f"  GLCM train shape: {glcm_train.shape}, GLCM test shape: {glcm_test.shape}")
 
-        print("\n[STEP] Fusing features: [DF1(1000) | DF2(1000) | HF(20)] = 2020-dim")
-        x_train_raw = np.hstack([df1_train, df2_train, glcm_train])
-        x_test_raw = np.hstack([df1_test, df2_test, glcm_test])
+        print("[STEP] Extracting L4 handcrafted features (LBP) - LT (10-dim)")
+        lbp_train = extract_all_lbp(train_paths)
+        lbp_test = extract_all_lbp(test_paths)
+        print(f"  LBP train shape: {lbp_train.shape}, LBP test shape: {lbp_test.shape}")
+
+        print("\n[STEP] Fusing features: [DF1(1000) | DF2(1000) | HF(20) | LT(10)] = 2030-dim")
+        x_train_raw = np.hstack([df1_train, df2_train, glcm_train, lbp_train])
+        x_test_raw = np.hstack([df1_test, df2_test, glcm_test, lbp_test])
         print(f"  Fused train shape: {x_train_raw.shape}")
         print(f"  Fused test shape:  {x_test_raw.shape}")
 
-        train_cache_path = save_feature_cache(objective, "train", train_paths, train_labels, df1_train, df2_train, glcm_train, x_train_raw)
-        test_cache_path = save_feature_cache(objective, "test", test_paths, test_labels, df1_test, df2_test, glcm_test, x_test_raw)
+        train_cache_path = save_feature_cache(
+            objective,
+            "train",
+            train_paths,
+            train_labels,
+            df1_train,
+            df2_train,
+            glcm_train,
+            lbp_train,
+            x_train_raw,
+        )
+        test_cache_path = save_feature_cache(
+            objective,
+            "test",
+            test_paths,
+            test_labels,
+            df1_test,
+            df2_test,
+            glcm_test,
+            lbp_test,
+            x_test_raw,
+        )
 
         print("[STEP] Normalizing fused features")
         scaler = StandardScaler()
@@ -990,9 +1095,9 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
 
         cm_path = _save_confusion_plot(cm, le.classes_, objective)
 
-        model_path = npath(MODEL_DIR, f"rf_{objective}.joblib")
-        encoder_path = npath(MODEL_DIR, f"le_{objective}.joblib")
-        scaler_path = npath(MODEL_DIR, f"scaler_{objective}.joblib")
+        model_path = npath(MODEL_DIR, f"rf_{objective}_{FEATURE_PIPELINE}.joblib")
+        encoder_path = npath(MODEL_DIR, f"le_{objective}_{FEATURE_PIPELINE}.joblib")
+        scaler_path = npath(MODEL_DIR, f"scaler_{objective}_{FEATURE_PIPELINE}.joblib")
         try:
             joblib.dump(clf, model_path)
             joblib.dump(le, encoder_path)
@@ -1010,7 +1115,8 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
         for ang in ["0", "45", "90", "135"]:
             for prop in ["contrast", "correlation", "energy", "homogeneity", "entropy"]:
                 glcm_names.append(f"glcm_{prop}_{ang}")
-        feature_names = df1_names + df2_names + glcm_names
+        lbp_names = [f"lbp_bin_{i + 1}" for i in range(LBP_POINTS + 2)]
+        feature_names = df1_names + df2_names + glcm_names + lbp_names
 
         importances_df = pd.DataFrame({"feature": feature_names, "importance": clf.feature_importances_})
         importances_df = importances_df.sort_values(by="importance", ascending=False)
@@ -1035,6 +1141,7 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
             "l1_dim": 1000.0,
             "l2_dim": 1000.0,
             "l3_dim": 20.0,
+            "l4_dim": float(LBP_POINTS + 2),
         }
         metrics_path = _save_metrics_json(objective, metrics)
 
@@ -1047,13 +1154,14 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
                 "random_state": 42,
                 "classifier": "RandomForestClassifier",
                 "architecture": "M1-Paper",
-                "fusion_dim": 2020,
+                "fusion_dim": 2030,
                 "pca_applied": False,
                 "backbone_framework": "PyTorch",
                 "backbone_library": "timm",
                 "backbone_model": "inception_resnet_v2",
                 "normalization": "imagenet",
                 "saliency_method": "laplacian_approximation",
+                "feature_pipeline": FEATURE_PIPELINE,
             }
         )
         mlflow.log_metrics(
@@ -1087,6 +1195,7 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
             "feature_cache_train": os.path.basename(train_cache_path),
             "feature_cache_test": os.path.basename(test_cache_path),
             "deep_feature_source": "inception_resnet_v2 logits",
+            "feature_pipeline": FEATURE_PIPELINE,
         }
         spec_path = npath(RESULT_DIR, f"inference_spec_{objective}.json")
         with open(spec_path, "w", encoding="utf-8") as fobj:

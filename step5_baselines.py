@@ -38,7 +38,7 @@ from sklearn.metrics import (
 )
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import StratifiedKFold, cross_val_score
-from skimage.feature import graycomatrix, graycoprops
+from skimage.feature import graycomatrix, graycoprops, local_binary_pattern
 import pandas as pd
 from tqdm import tqdm
 
@@ -65,6 +65,9 @@ os.makedirs(_RESULT_DIR, exist_ok=True)
 os.makedirs(_GLCM_CACHE_DIR, exist_ok=True)
 
 OBJECTIVES = ("informativeness", "damage")
+LBP_POINTS = 8
+LBP_RADIUS = 1
+LBP_METHOD = "uniform"
 
 DEFAULT_LABEL_MAPS = {
     "informativeness": {
@@ -134,6 +137,30 @@ def extract_glcm_features(image_path: str) -> np.ndarray:
     return np.asarray(out, dtype=np.float32)
 
 
+def extract_lbp_features(image_path: str) -> np.ndarray:
+    """Extract rotation-invariant uniform LBP histogram features."""
+    try:
+        with Image.open(image_path) as img:
+            img = img.convert("L")
+            img = img.resize(_IMG_SIZE, Image.Resampling.LANCZOS)
+            arr = np.asarray(img)
+    except UnidentifiedImageError as exc:
+        print(f"[WARN] Corrupt image: '{image_path}': {exc}")
+        return np.zeros(LBP_POINTS + 2, dtype=np.float32)
+    except OSError as exc:
+        print(f"[WARN] Could not read '{image_path}': {exc}")
+        return np.zeros(LBP_POINTS + 2, dtype=np.float32)
+
+    lbp = local_binary_pattern(arr, LBP_POINTS, LBP_RADIUS, method=LBP_METHOD)
+    hist, _ = np.histogram(
+        lbp.ravel(),
+        bins=np.arange(0, LBP_POINTS + 3),
+        range=(0, LBP_POINTS + 2),
+        density=True,
+    )
+    return hist.astype(np.float32)
+
+
 def extract_all_glcm(image_paths: Sequence[str]) -> np.ndarray:
     """Extract GLCM for all images with caching."""
     hasher = hashlib.md5()
@@ -161,6 +188,39 @@ def extract_all_glcm(image_paths: Sequence[str]) -> np.ndarray:
             executor.map(extract_glcm_features, image_paths),
             total=len(image_paths),
             desc="    GLCM features"
+        ))
+    feats = np.asarray(results, dtype=np.float32)
+    np.savez_compressed(cache_file, feats)
+    return feats
+
+
+def extract_all_lbp(image_paths: Sequence[str]) -> np.ndarray:
+    """Extract LBP for all images with caching."""
+    hasher = hashlib.md5()
+    for pth in image_paths:
+        try:
+            mtime = os.path.getmtime(pth)
+            hasher.update(f"{pth}_{mtime}".encode('utf-8'))
+        except OSError:
+            hasher.update(pth.encode('utf-8'))
+
+    cache_key = hasher.hexdigest()
+    cache_file = npath(_GLCM_CACHE_DIR, f"lbp_{cache_key}.npz")
+
+    if os.path.exists(cache_file):
+        print(f"  [INFO] Loaded LBP from cache: {cache_file}")
+        data = np.load(cache_file)
+        return data['arr_0']
+
+    print("  [INFO] Extracting LBP features in parallel...")
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["OMP_NUM_THREADS"] = "1"
+    workers = min(8, os.cpu_count() or 1)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as executor:
+        results = list(tqdm(
+            executor.map(extract_lbp_features, image_paths),
+            total=len(image_paths),
+            desc="    LBP features"
         ))
     feats = np.asarray(results, dtype=np.float32)
     np.savez_compressed(cache_file, feats)
@@ -328,6 +388,10 @@ def run_baseline_comparison(objective: str) -> Optional[Dict[str, Dict]]:
     print(f"  Extracting GLCM (20-dim)...")
     glcm_train = extract_all_glcm(train_paths)
     glcm_test = extract_all_glcm(test_paths)
+
+    print(f"  Extracting LBP (10-dim)...")
+    lbp_train = extract_all_lbp(train_paths)
+    lbp_test = extract_all_lbp(test_paths)
     
     # Try to load deep features (from step3)
     print(f"  Loading deep features (1000-dim)...")
@@ -337,21 +401,22 @@ def run_baseline_comparison(objective: str) -> Optional[Dict[str, Dict]]:
     # Evaluate feature sets
     all_results = {}
     
-    # 1. Handcrafted only (GLCM)
-    print(f"\n[EVAL] Handcrafted features (GLCM only)")
+    # 1. Handcrafted only (GLCM + LBP)
+    print(f"\n[EVAL] Handcrafted features (GLCM + LBP)")
     results_handcrafted = evaluate_feature_set(
-        objective, "GLCM-only",
-        glcm_train, y_train, glcm_test, y_test, le
+        objective, "GLCM+LBP",
+        np.hstack([glcm_train, lbp_train]), y_train,
+        np.hstack([glcm_test, lbp_test]), y_test, le
     )
     all_results['handcrafted'] = results_handcrafted
     
-    # 2. Fused (Deep + GLCM) - if deep features available
+    # 2. Fused (Deep + GLCM + LBP) - if deep features available
     if deep_train is not None and deep_test is not None:
-        print(f"\n[EVAL] Fused features (Deep + GLCM)")
-        x_train_fused = np.hstack([deep_train, glcm_train])
-        x_test_fused = np.hstack([deep_test, glcm_test])
+        print(f"\n[EVAL] Fused features (Deep + GLCM + LBP)")
+        x_train_fused = np.hstack([deep_train, glcm_train, lbp_train])
+        x_test_fused = np.hstack([deep_test, glcm_test, lbp_test])
         results_fused = evaluate_feature_set(
-            objective, "Deep+GLCM",
+            objective, "Deep+GLCM+LBP",
             x_train_fused, y_train, x_test_fused, y_test, le
         )
         all_results['fused'] = results_fused
