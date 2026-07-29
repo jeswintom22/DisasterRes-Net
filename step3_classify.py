@@ -1,4 +1,4 @@
-"""Step 3: extract M1 features and train the paper-aligned classifier.
+﻿"""Step 3: extract M1 features and train the paper-aligned classifier.
 
 Architecture:
   L1: IRv2 on original image -> DF1 (1000-dim ImageNet logits)
@@ -44,6 +44,14 @@ from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from skimage.feature import graycomatrix, graycoprops, local_binary_pattern
 from tqdm import tqdm
+
+from preprocessing.lbp import LBPFeatureExtractor, LBP_BINS
+from preprocessing.saliency import SaliencyAttention, saliency_to_rgb as saliency_map_to_rgb
+from features.feature_contract import (
+    get_pipeline_spec,
+    resolve_artifact_spec,
+    validate_feature_importance_length,
+)
 
 warnings.filterwarnings("ignore")
 
@@ -96,7 +104,10 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 LBP_POINTS = 8
 LBP_RADIUS = 1
 LBP_METHOD = "uniform"
-FEATURE_PIPELINE = "df1_df2_glcm_lbp"
+FEATURE_PIPELINE = "df1_df2_glcm_lbp_stats"
+LEGACY_FEATURE_PIPELINE = "df1_df2_glcm_lbp"
+LEGACY_LBP_DIM = LBP_POINTS + 2
+LBP_FEATURE_DIM = LBP_BINS + 6
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(RESULT_DIR, exist_ok=True)
@@ -138,6 +149,8 @@ class TorchTrainingConfig:
 
 _device = None
 _shared_feature_models: Dict[str, torch.nn.Module] = {}
+_saliency_attention = SaliencyAttention()
+_lbp_extractor = LBPFeatureExtractor()
 
 
 def get_device():
@@ -233,24 +246,12 @@ def rgb_to_lms(img_rgb: np.ndarray) -> np.ndarray:
 
 
 def simple_saliency_map(img_rgb: np.ndarray) -> np.ndarray:
-    """Generate a practical saliency approximation using Laplacian contrast."""
+    """Generate saliency used by L2 and saliency-attention preprocessing."""
     try:
-        img_gray = Image.fromarray(img_rgb.astype(np.uint8)).convert("L")
-        img_gray = np.asarray(img_gray, dtype=np.float32) / 255.0
-
-        from scipy.ndimage import laplace
-
-        sal = np.abs(laplace(img_gray))
-        sal_min, sal_max = sal.min(), sal.max()
-        if sal_max > sal_min:
-            sal = (sal - sal_min) / (sal_max - sal_min)
-        else:
-            sal = np.zeros_like(sal)
-        return sal
+        return _saliency_attention.process(img_rgb).saliency_map
     except Exception as exc:
         print(f"[WARN] Saliency extraction failed: {exc}. Returning uniform saliency.")
         return np.ones((img_rgb.shape[0], img_rgb.shape[1]), dtype=np.float32) * 0.5
-
 
 def gradient_saliency_map(
     model: torch.nn.Module,
@@ -282,9 +283,8 @@ def gradient_saliency_map(
 
 
 def saliency_to_rgb(saliency_map: np.ndarray) -> np.ndarray:
-    rgb_sal = np.stack([saliency_map, saliency_map, saliency_map], axis=2)
-    return (rgb_sal * 255).astype(np.uint8)
-
+    """Compatibility wrapper around the shared saliency visualization helper."""
+    return saliency_map_to_rgb(saliency_map)
 
 def _make_loader(paths, labels, train: bool = False, saliency_input: bool = False, batch_size: int = BATCH_SIZE):
     dataset = DisasterDataset(
@@ -626,8 +626,9 @@ def extract_l1_l2_batched(
                 try:
                     with Image.open(path) as img:
                         img_rgb = np.asarray(img.convert("RGB"), dtype=np.uint8)
-                    orig_tensor = transform(Image.fromarray(img_rgb))
-                    sal = simple_saliency_map(img_rgb)
+                    saliency_output = _saliency_attention.process(img_rgb)
+                    orig_tensor = transform(Image.fromarray(saliency_output.enhanced_rgb))
+                    sal = saliency_output.saliency_map
                     sal_rgb = (np.stack([sal, sal, sal], axis=2) * 255).astype(np.uint8)
                     sal_tensor = transform(Image.fromarray(sal_rgb))
                 except Exception as exc:
@@ -695,27 +696,13 @@ def extract_glcm_features(image_path: str) -> np.ndarray:
 
 
 def extract_lbp_features(image_path: str) -> np.ndarray:
-    try:
-        with Image.open(image_path) as img:
-            img = img.convert("L")
-            img = img.resize(IMG_SIZE, Image.Resampling.LANCZOS)
-            arr = np.asarray(img)
-    except UnidentifiedImageError as exc:
-        print(f"[WARN] Corrupt image skipped in LBP: '{image_path}'. Reason: {exc}")
-        return np.zeros(LBP_POINTS + 2, dtype=np.float32)
-    except OSError as exc:
-        print(f"[WARN] Could not read image for LBP '{image_path}': {exc}")
-        return np.zeros(LBP_POINTS + 2, dtype=np.float32)
+    """Extract the full LBP texture vector: histogram + statistics."""
+    return _lbp_extractor.extract_from_path(image_path).feature_vector.astype(np.float32)
 
-    lbp = local_binary_pattern(arr, LBP_POINTS, LBP_RADIUS, method=LBP_METHOD)
-    hist, _ = np.histogram(
-        lbp.ravel(),
-        bins=np.arange(0, LBP_POINTS + 3),
-        range=(0, LBP_POINTS + 2),
-        density=True,
-    )
-    return hist.astype(np.float32)
 
+def extract_lbp_histogram(image_path: str) -> np.ndarray:
+    """Extract legacy 10-bin LBP histogram for existing checkpoints."""
+    return _lbp_extractor.extract_from_path(image_path).histogram.astype(np.float32)
 
 def extract_all_glcm(image_paths: Sequence[str]) -> np.ndarray:
     hasher = hashlib.md5()
@@ -752,6 +739,7 @@ def extract_all_glcm(image_paths: Sequence[str]) -> np.ndarray:
 
 def extract_all_lbp(image_paths: Sequence[str]) -> np.ndarray:
     hasher = hashlib.md5()
+    hasher.update(f"lbp_dim_{LBP_FEATURE_DIM}_schema_v2".encode("utf-8"))
     for pth in image_paths:
         try:
             mtime = os.path.getmtime(pth)
@@ -765,7 +753,14 @@ def extract_all_lbp(image_paths: Sequence[str]) -> np.ndarray:
     if os.path.exists(cache_file):
         print(f"[INFO] Loading LBP features from cache: {cache_file}")
         data = np.load(cache_file)
-        return data["arr_0"]
+        cached = data["arr_0"]
+        if cached.ndim == 2 and cached.shape[1] == LBP_FEATURE_DIM:
+            return cached
+        print(
+            f"[WARN] Ignoring stale LBP cache '{cache_file}': "
+            f"found width {cached.shape[1] if cached.ndim == 2 else cached.shape}, "
+            f"expected {LBP_FEATURE_DIM}."
+        )
 
     print("[INFO] Extracting LBP features in parallel...")
     os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -913,6 +908,10 @@ def _load_rf_bundle(objective: str):
          npath(MODEL_DIR, f"le_{objective}_{FEATURE_PIPELINE}.joblib"),
          npath(MODEL_DIR, f"scaler_{objective}_{FEATURE_PIPELINE}.joblib"),
          FEATURE_PIPELINE),
+        (npath(MODEL_DIR, f"rf_{objective}_{LEGACY_FEATURE_PIPELINE}.joblib"),
+         npath(MODEL_DIR, f"le_{objective}_{LEGACY_FEATURE_PIPELINE}.joblib"),
+         npath(MODEL_DIR, f"scaler_{objective}_{LEGACY_FEATURE_PIPELINE}.joblib"),
+         LEGACY_FEATURE_PIPELINE),
         (npath(MODEL_DIR, f"rf_{objective}.joblib"),
          npath(MODEL_DIR, f"le_{objective}.joblib"),
          npath(MODEL_DIR, f"scaler_{objective}.joblib"),
@@ -920,23 +919,35 @@ def _load_rf_bundle(objective: str):
     ]
     for clf_path, le_path, scaler_path, pipeline in candidates:
         if os.path.exists(clf_path) and os.path.exists(le_path) and os.path.exists(scaler_path):
-            return joblib.load(clf_path), joblib.load(le_path), joblib.load(scaler_path), pipeline
+            clf = joblib.load(clf_path)
+            le = joblib.load(le_path)
+            scaler = joblib.load(scaler_path)
+            expected_dim = getattr(scaler, "n_features_in_", None)
+            spec = resolve_artifact_spec(pipeline, expected_dim)
+            if spec.name != pipeline:
+                print(
+                    f"[WARN] Artifact '{os.path.basename(scaler_path)}' is named '{pipeline}' "
+                    f"but scaler expects {expected_dim} features. Using '{spec.name}' contract."
+                )
+            return clf, le, scaler, spec
     raise FileNotFoundError(f"Missing inference artifacts for objective '{objective}'")
-
 
 def predict_image(image_path: str, objective: str) -> Dict[str, object]:
     """Run the paper-aligned fused inference path for one image."""
     if objective not in OBJECTIVES:
         raise ValueError(f"Unknown objective '{objective}'")
 
-    clf, le, scaler, feature_pipeline = _load_rf_bundle(objective)
+    clf, le, scaler, feature_spec = _load_rf_bundle(objective)
     model_l1, model_l2 = _load_shared_feature_models()
 
     df1 = extract_features_predictions_layer(model_l1, [image_path], batch_size=1, saliency_input=False)
     df2 = extract_features_predictions_layer(model_l2, [image_path], batch_size=1, saliency_input=True)
     glcm = np.asarray([extract_glcm_features(image_path)], dtype=np.float32)
-    if feature_pipeline == FEATURE_PIPELINE:
+    if feature_spec.name == FEATURE_PIPELINE:
         lbp = np.asarray([extract_lbp_features(image_path)], dtype=np.float32)
+        fused = np.hstack([df1, df2, glcm, lbp])
+    elif feature_spec.name == LEGACY_FEATURE_PIPELINE:
+        lbp = np.asarray([extract_lbp_histogram(image_path)], dtype=np.float32)
         fused = np.hstack([df1, df2, glcm, lbp])
     else:
         fused = np.hstack([df1, df2, glcm])
@@ -954,6 +965,8 @@ def predict_image(image_path: str, objective: str) -> Dict[str, object]:
         "objective": objective,
         "prediction": pred_label,
         "feature_dim": int(fused.shape[1]),
+        "feature_pipeline": feature_spec.name,
+        "feature_metadata": feature_spec.metadata(),
     }
     if confidence is not None:
         result["confidence"] = confidence
@@ -1115,8 +1128,9 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
         for ang in ["0", "45", "90", "135"]:
             for prop in ["contrast", "correlation", "energy", "homogeneity", "entropy"]:
                 glcm_names.append(f"glcm_{prop}_{ang}")
-        lbp_names = [f"lbp_bin_{i + 1}" for i in range(LBP_POINTS + 2)]
-        feature_names = df1_names + df2_names + glcm_names + lbp_names
+        feature_spec = get_pipeline_spec(FEATURE_PIPELINE)
+        feature_names = feature_spec.feature_names
+        validate_feature_importance_length(clf.feature_importances_, feature_spec)
 
         importances_df = pd.DataFrame({"feature": feature_names, "importance": clf.feature_importances_})
         importances_df = importances_df.sort_values(by="importance", ascending=False)
@@ -1141,7 +1155,7 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
             "l1_dim": 1000.0,
             "l2_dim": 1000.0,
             "l3_dim": 20.0,
-            "l4_dim": float(LBP_POINTS + 2),
+            "l4_dim": float(LBP_FEATURE_DIM),
         }
         metrics_path = _save_metrics_json(objective, metrics)
 
@@ -1154,13 +1168,13 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
                 "random_state": 42,
                 "classifier": "RandomForestClassifier",
                 "architecture": "M1-Paper",
-                "fusion_dim": 2030,
+                "fusion_dim": 2036,
                 "pca_applied": False,
                 "backbone_framework": "PyTorch",
                 "backbone_library": "timm",
                 "backbone_model": "inception_resnet_v2",
                 "normalization": "imagenet",
-                "saliency_method": "laplacian_approximation",
+                "saliency_method": "saliency_attention_weighted_cnn_input",
                 "feature_pipeline": FEATURE_PIPELINE,
             }
         )
@@ -1227,3 +1241,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+

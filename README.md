@@ -1,4 +1,4 @@
-# DisasterRes-Net
+﻿# DisasterRes-Net
 
 DisasterRes-Net is a disaster response image classification pipeline inspired by Gupta and Roy (2024).
 
@@ -46,6 +46,18 @@ Run live demo:
 
 python demo.py
 
+Run the research ablation study from cached feature matrices:
+
+python -m evaluation.ablation
+
+Generate audit, architecture, validation, and final project reports:
+
+python -m reports.generate_reports
+
+Run the Flask research dashboard:
+
+python app.py
+
 ## Expected Outputs
 
 - saved_models contains Random Forest models, label encoders, scalers, and optional PyTorch checkpoints.
@@ -58,3 +70,18 @@ python demo.py
 - Windows path normalization is handled in the scripts.
 - If running on CPU only, PyTorch feature extraction will be slower.
 - Optional direct PyTorch classifier training can be enabled with `DISASTERRES_TORCH_TRAIN=1`.
+## Hybrid Research Extension
+
+The project now includes a modular research-grade hybrid pipeline:
+
+- `preprocessing/lbp.py`: normalized LBP histogram, texture map, and statistical descriptors.
+- `preprocessing/saliency.py`: saliency detection and attention-weighted image generation.
+- `fusion/feature_fusion.py`: CNN + handcrafted feature concatenation metadata.
+- `models/hybrid_pipeline.py`: saliency-attended CNN inference plus LBP/GLCM fusion with checkpoint fallback.
+- `damage_assessment/localization.py`: M2 damage mask, connected regions, DDM, DEM, and impact estimates.
+- `HYBRID_RESEARCH_ARCHITECTURE.md`: architectural notes and checkpoint compatibility details.
+
+Existing `df1_df2_glcm_lbp` checkpoints remain usable. Retraining `step3_classify.py` creates the newer `df1_df2_glcm_lbp_stats` artifacts with LBP statistical descriptors included in the fused classifier input.
+
+The loader resolves feature contracts from each scaler's `n_features_in_`, so mislabeled or legacy checkpoints fail with informative messages instead of silent 2036/2030 feature mismatches.
+

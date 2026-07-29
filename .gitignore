@@ -41,3 +41,43 @@ mlruns/
 *.log
 *.tmp
 *.temp
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual Env
+.venv/
+venv/
+env/
+
+# Environment
+.env
+
+# Dataset
+raw_dataset/
+clean_dataset/
+split_dataset/
+
+# MLFlow
+mlruns/
+mlflow.db
+
+# Cache
+.cache/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Large Models
+saved_models/*.pth
+saved_models/*.pt
+saved_models/*.ckpt
+saved_models/*.onnx

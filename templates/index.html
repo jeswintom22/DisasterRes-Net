@@ -1,80 +1,154 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DisasterRes-Net | AI Insights</title>
+    <title>DisasterRes-Net Research Dashboard</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 
 <body>
-    <header>
-        <h1>DisasterRes-Net</h1>
-        <p class="subtitle">Deep Learning Triage & Spatial Explanations</p>
+    <header class="topbar">
+        <div>
+            <h1>DisasterRes-Net</h1>
+            <p>Hybrid disaster recognition and damage assessment dashboard</p>
+        </div>
+        <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme"><i class="fa-solid fa-moon"></i></button>
     </header>
 
-    <main class="container">
-        <section class="glass-panel upload-section" id="uploadPanel">
+    <main class="shell">
+        <section class="upload-panel" id="uploadPanel">
             <div class="drop-zone" id="dropZone">
-                <i class="fa-solid fa-satellite"></i>
-                <h2>Drag & Drop Surveillance Imagery</h2>
-                <p>or click to browse local files</p>
-                <input type="file" id="fileInput" class="hidden-input" accept="image/*">
+                <i class="fa-solid fa-cloud-arrow-up"></i>
+                <h2>Upload Disaster Imagery</h2>
+                <p>JPG, PNG, or JPEG surveillance frame</p>
+                <input type="file" id="fileInput" accept="image/*">
             </div>
-
-            <div class="image-preview-container" id="previewContainer">
-                <img id="imagePreview" class="image-preview" src="" alt="Preview">
+            <div class="preview-wrap" id="previewWrap">
+                <img id="imagePreview" alt="Selected image preview">
             </div>
-
-            <button class="btn" id="analyzeBtn" disabled>
-                <i class="fa-solid fa-layer-group"></i> Extract Insights
+            <button class="primary-btn" id="analyzeBtn" disabled>
+                <i class="fa-solid fa-microscope"></i>
+                Analyze Image
             </button>
-            <div class="loader" id="loader">Computing Grad-CAM via InceptionResNetV2...</div>
+            <label class="backend-select">
+                <span>Localization Backend</span>
+                <select id="backendSelect">
+                    <option value="sun_ica">SUN + ICA</option>
+                    <option value="opencv">OpenCV Saliency</option>
+                    <option value="gradcam">GradCAM</option>
+                    <option value="gradcam_plus_plus">GradCAM++</option>
+                    <option value="scorecam">Score-CAM</option>
+                </select>
+            </label>
+            <div class="loading" id="loader">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
         </section>
 
-        <section class="results-section" id="resultsSection" style="display: none; opacity: 0;">
-            <div class="action-bar" style="text-align: right; margin-bottom: 1rem;">
-                <button class="btn secondary" id="resetBtn">Analyze New Image</button>
-            </div>
-            <div class="grid-layout">
-                <!-- Disaster Type Card -->
-                <div class="glass-panel result-card">
-                    <div class="details">
-                        <span class="label-title">Disaster Classification</span>
-                        <span class="prediction" id="typePred">Analyzing...</span>
-                        <div class="confidence-bar">
-                            <div class="confidence-fill" id="typeConfBar"></div>
-                        </div>
-                        <span id="typeConfText" style="opacity: 0.7; font-size: 0.9rem;">--% Confidence</span>
-                    </div>
-                    <div class="heatmap-viewer">
-                        <img id="typeHeatmap" class="heatmap-img" src="" alt="Grad-CAM Heatmap">
-                        <div class="overlay-tag"
-                            style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem;">
-                            Grad-CAM Response</div>
-                    </div>
+        <section class="dashboard" id="dashboard" hidden>
+            <div class="dashboard-head">
+                <div>
+                    <span class="eyebrow">Research Inference</span>
+                    <h2 id="mainPrediction">Analyzing</h2>
+                    <p id="disasterDescription"></p>
                 </div>
+                <button class="ghost-btn" id="resetBtn"><i class="fa-solid fa-rotate-left"></i> New Image</button>
+            </div>
 
-                <!-- Damage Card -->
-                <div class="glass-panel result-card">
-                    <div class="details">
-                        <span class="label-title">Damage Assessment</span>
-                        <span class="prediction" id="damagePred">Analyzing...</span>
-                        <div class="confidence-bar">
-                            <div class="confidence-fill" id="damageConfBar"></div>
+            <section class="metrics-grid">
+                <article class="metric-card accent">
+                    <span>Confidence</span>
+                    <strong id="confidenceMetric">--%</strong>
+                    <div class="mini-bar"><i id="confidenceBar"></i></div>
+                </article>
+                <article class="metric-card">
+                    <span>DEM Score</span>
+                    <strong id="demMetric">--</strong>
+                    <small id="severityMetric">--</small>
+                </article>
+                <article class="metric-card">
+                    <span>Affected Area</span>
+                    <strong id="areaMetric">--%</strong>
+                    <small id="regionsMetric">-- regions</small>
+                </article>
+                <article class="metric-card">
+                    <span>Processing Time</span>
+                    <strong id="timeMetric">-- ms</strong>
+                    <small id="fusionDimMetric">-- features</small>
+                </article>
+            </section>
+
+            <section class="workspace-grid">
+                <article class="viewer-panel">
+                    <div class="panel-title">
+                        <h3>Visual Evidence</h3>
+                        <div class="view-tabs" id="viewTabs">
+                            <button data-view="original" class="active">Original</button>
+                            <button data-view="saliency_overlay">Saliency</button>
+                            <button data-view="lbp">LBP</button>
+                            <button data-view="gradcam">GradCAM</button>
+                            <button data-view="ddm">DDM</button>
+                            <button data-view="damage_mask">Mask</button>
                         </div>
-                        <span id="damageConfText" style="opacity: 0.7; font-size: 0.9rem;">--% Confidence</span>
                     </div>
-                    <div class="heatmap-viewer">
-                        <img id="damageHeatmap" class="heatmap-img" src="" alt="Grad-CAM Heatmap">
-                        <div class="overlay-tag"
-                            style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem;">
-                            Grad-CAM Response</div>
+                    <div class="image-stage" id="imageStage">
+                        <img id="activeImage" alt="Selected visualization">
                     </div>
-                </div>
-            </div>
+                    <div class="comparison">
+                        <img id="compareBase" alt="Original comparison layer">
+                        <div class="compare-top" id="compareTop"><img id="compareOverlay" alt="Overlay comparison layer"></div>
+                        <input type="range" min="0" max="100" value="52" id="compareSlider" aria-label="Comparison slider">
+                    </div>
+                </article>
+
+                <aside class="side-panel">
+                    <div class="gauge-card">
+                        <div class="ring" id="demRing"><span id="ringValue">0</span></div>
+                        <div>
+                            <span>Damage Evaluation Metric</span>
+                            <strong id="ringLabel">--</strong>
+                        </div>
+                    </div>
+
+                    <div class="section-card">
+                        <h3>Top Predictions</h3>
+                        <div id="topPredictions" class="bars"></div>
+                    </div>
+
+                    <div class="section-card">
+                        <h3>Texture Statistics</h3>
+                        <div id="textureStats" class="stat-list"></div>
+                    </div>
+                </aside>
+            </section>
+
+            <section class="detail-grid">
+                <article class="section-card">
+                    <h3>Damage Localization</h3>
+                    <div id="damageStats" class="stat-list"></div>
+                    <div id="regionList" class="region-list"></div>
+                </article>
+
+                <article class="section-card">
+                    <h3>Impact Estimates</h3>
+                    <div id="impactStats" class="stat-list"></div>
+                </article>
+
+                <article class="section-card wide">
+                    <h3>Prediction Breakdown</h3>
+                    <div id="breakdown" class="timeline"></div>
+                </article>
+
+                <article class="section-card wide">
+                    <h3>Emergency Recommendations</h3>
+                    <div id="recommendations" class="recommendations"></div>
+                </article>
+            </section>
         </section>
     </main>
 
@@ -82,99 +156,185 @@
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
         const imagePreview = document.getElementById('imagePreview');
-        const previewContainer = document.getElementById('previewContainer');
+        const previewWrap = document.getElementById('previewWrap');
         const analyzeBtn = document.getElementById('analyzeBtn');
         const loader = document.getElementById('loader');
-        const resultsSection = document.getElementById('resultsSection');
-        const resetBtn = document.getElementById('resetBtn');
+        const dashboard = document.getElementById('dashboard');
         const uploadPanel = document.getElementById('uploadPanel');
-
+        const resetBtn = document.getElementById('resetBtn');
+        const activeImage = document.getElementById('activeImage');
+        const compareSlider = document.getElementById('compareSlider');
+        const compareTop = document.getElementById('compareTop');
+        const themeToggle = document.getElementById('themeToggle');
+        const backendSelect = document.getElementById('backendSelect');
         let selectedFile = null;
+        let latestResult = null;
 
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
-            dropZone.addEventListener(evt, e => e.preventDefault(), false);
+            dropZone.addEventListener(evt, event => event.preventDefault());
         });
 
         dropZone.addEventListener('dragover', () => dropZone.classList.add('dragover'));
         dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-        dropZone.addEventListener('drop', (e) => {
+        dropZone.addEventListener('drop', event => {
             dropZone.classList.remove('dragover');
-            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+            if (event.dataTransfer.files.length) handleFile(event.dataTransfer.files[0]);
         });
         dropZone.addEventListener('click', () => fileInput.click());
-        fileInput.addEventListener('change', (e) => { if (e.target.files.length) handleFile(e.target.files[0]); });
+        fileInput.addEventListener('change', event => {
+            if (event.target.files.length) handleFile(event.target.files[0]);
+        });
+
+        themeToggle.addEventListener('click', () => document.body.classList.toggle('light-mode'));
+        compareSlider.addEventListener('input', event => compareTop.style.width = `${event.target.value}%`);
+
+        document.getElementById('viewTabs').addEventListener('click', event => {
+            const button = event.target.closest('button[data-view]');
+            if (!button || !latestResult) return;
+            document.querySelectorAll('.view-tabs button').forEach(item => item.classList.remove('active'));
+            button.classList.add('active');
+            activeImage.src = latestResult.visualizations[button.dataset.view];
+        });
 
         function handleFile(file) {
             if (!file.type.startsWith('image/')) return;
             selectedFile = file;
             const reader = new FileReader();
-            reader.onload = (e) => {
-                imagePreview.src = e.target.result;
-                previewContainer.style.display = 'block';
-                dropZone.style.display = 'none';
+            reader.onload = event => {
+                imagePreview.src = event.target.result;
+                previewWrap.classList.add('visible');
                 analyzeBtn.disabled = false;
-
-                // Trigger 3D float animation entrance
-                setTimeout(() => {
-                    previewContainer.style.opacity = '1';
-                    previewContainer.style.transform = 'perspective(1000px) rotateY(-5deg) rotateX(5deg)';
-                }, 50);
             };
             reader.readAsDataURL(file);
         }
 
         analyzeBtn.addEventListener('click', async () => {
             if (!selectedFile) return;
-            analyzeBtn.style.display = 'none';
-            loader.style.display = 'block';
-
+            analyzeBtn.disabled = true;
+            loader.classList.add('visible');
             const formData = new FormData();
             formData.append('file', selectedFile);
-
+            formData.append('localization_backend', backendSelect.value);
             try {
                 const response = await fetch('/api/predict', { method: 'POST', body: formData });
-                if (!response.ok) throw new Error('API Error');
                 const data = await response.json();
-
-                if (data.disaster_type && !data.disaster_type.error) {
-                    document.getElementById('typePred').textContent = data.disaster_type.prediction.replace(/_/g, ' ');
-                    document.getElementById('typeConfBar').style.width = data.disaster_type.confidence + '%';
-                    document.getElementById('typeConfText').textContent = data.disaster_type.confidence + '% Confidence';
-                    document.getElementById('typeHeatmap').src = data.disaster_type.heatmap;
-                }
-
-                if (data.damage && !data.damage.error) {
-                    document.getElementById('damagePred').textContent = data.damage.prediction.replace(/_/g, ' ');
-                    document.getElementById('damageConfBar').style.width = data.damage.confidence + '%';
-                    document.getElementById('damageConfText').textContent = data.damage.confidence + '% Confidence';
-                    document.getElementById('damageHeatmap').src = data.damage.heatmap;
-                }
-
-                uploadPanel.style.display = 'none';
-                resultsSection.style.display = 'block';
-                setTimeout(() => resultsSection.style.opacity = '1', 50);
-
+                if (!response.ok) throw new Error(data.error || 'Prediction failed');
+                latestResult = data;
+                renderDashboard(data);
             } catch (error) {
-                alert('Prediction failed. Ensure models are trained and API is connected.');
+                alert(error.message);
             } finally {
-                analyzeBtn.style.display = 'inline-block';
-                loader.style.display = 'none';
+                analyzeBtn.disabled = false;
+                loader.classList.remove('visible');
             }
         });
 
         resetBtn.addEventListener('click', () => {
-            resultsSection.style.opacity = '0';
-            setTimeout(() => {
-                resultsSection.style.display = 'none';
-                uploadPanel.style.display = 'flex';
-                fileInput.value = '';
-                selectedFile = null;
-                imagePreview.src = '';
-                previewContainer.style.display = 'none';
-                dropZone.style.display = 'block';
-                analyzeBtn.disabled = true;
-            }, 400);
+            latestResult = null;
+            selectedFile = null;
+            fileInput.value = '';
+            previewWrap.classList.remove('visible');
+            analyzeBtn.disabled = true;
+            dashboard.hidden = true;
+            uploadPanel.hidden = false;
         });
+
+        function renderDashboard(data) {
+            const pred = data.disaster_type;
+            const damage = data.damage_assessment;
+            uploadPanel.hidden = true;
+            dashboard.hidden = false;
+            document.getElementById('mainPrediction').textContent = titleCase(pred.prediction);
+            document.getElementById('disasterDescription').textContent = data.disaster_description;
+            document.getElementById('confidenceMetric').textContent = `${pred.confidence}%`;
+            document.getElementById('confidenceBar').style.width = `${pred.confidence}%`;
+            document.getElementById('demMetric').textContent = damage.dem_score;
+            document.getElementById('severityMetric').textContent = damage.severity_level;
+            document.getElementById('areaMetric').textContent = `${damage.affected_area_percentage}%`;
+            document.getElementById('regionsMetric').textContent = `${damage.damaged_region_count} regions`;
+            document.getElementById('timeMetric').textContent = `${data.processing_time_ms} ms`;
+            document.getElementById('fusionDimMetric').textContent = `${pred.feature_dim} features`;
+            document.getElementById('ringValue').textContent = Math.round(damage.dem_score);
+            document.getElementById('ringLabel').textContent = damage.severity_level;
+            document.getElementById('demRing').style.setProperty('--value', `${damage.dem_score}%`);
+            activeImage.src = data.visualizations.original;
+            document.getElementById('compareBase').src = data.visualizations.original;
+            document.getElementById('compareOverlay').src = data.visualizations.ddm;
+            compareTop.style.width = `${compareSlider.value}%`;
+            renderBars('topPredictions', pred.top5, 'confidence');
+            renderStats('textureStats', data.texture_statistics);
+            renderStats('impactStats', data.damage_assessment.impact_estimates);
+            renderStats('damageStats', {
+                affected_area: `${damage.affected_area_percentage}%`,
+                largest_region: `${damage.largest_region_percentage}%`,
+                average_density: damage.average_damage_density,
+                localization_score: damage.localization_score,
+                localization_backend: damage.localization_backend,
+                localization_confidence: damage.localization_confidence,
+                texture_entropy: damage.texture_entropy,
+                boundary_complexity: damage.boundary_complexity,
+                centroid: damage.centroid ? damage.centroid.join(', ') : 'none'
+            });
+            renderRegions(damage.regions);
+            renderBreakdown(data.prediction_breakdown, pred.fusion);
+            renderRecommendations(damage.emergency_recommendations);
+            document.querySelectorAll('.view-tabs button').forEach(item => item.classList.toggle('active', item.dataset.view === 'original'));
+        }
+
+        function renderBars(id, rows, valueKey) {
+            const root = document.getElementById(id);
+            root.innerHTML = rows.map(row => `
+                <div class="bar-row">
+                    <span>${titleCase(row.label)}</span>
+                    <b>${row[valueKey]}%</b>
+                    <i style="width:${row[valueKey]}%"></i>
+                </div>
+            `).join('');
+        }
+
+        function renderStats(id, stats) {
+            document.getElementById(id).innerHTML = Object.entries(stats).map(([key, value]) => `
+                <div><span>${titleCase(key)}</span><strong>${value}</strong></div>
+            `).join('');
+        }
+
+        function renderRegions(regions) {
+            const root = document.getElementById('regionList');
+            if (!regions.length) {
+                root.innerHTML = '<button>No connected damage regions</button>';
+                return;
+            }
+            root.innerHTML = regions.map((region, index) => `
+                <button data-index="${index}">
+                    <span>Region ${index + 1}</span>
+                    <strong>${region.area_percentage}%</strong>
+                    <small>${region.centroid.join(', ')}</small>
+                </button>
+            `).join('');
+            root.querySelectorAll('button').forEach(button => {
+                button.addEventListener('click', () => {
+                    root.querySelectorAll('button').forEach(item => item.classList.remove('active'));
+                    button.classList.add('active');
+                    activeImage.src = latestResult.visualizations.ddm;
+                    document.querySelectorAll('.view-tabs button').forEach(item => item.classList.toggle('active', item.dataset.view === 'ddm'));
+                });
+            });
+        }
+
+        function renderBreakdown(items, fusion) {
+            const fusionText = `${fusion.strategy || 'fusion'} | ${fusion.fused_dim || 0} dimensions`;
+            document.getElementById('breakdown').innerHTML = Object.entries(items).map(([key, value]) => `
+                <div><span></span><strong>${titleCase(key)}</strong><p>${value}</p></div>
+            `).join('') + `<div><span></span><strong>Feature Fusion</strong><p>${fusionText}</p></div>`;
+        }
+
+        function renderRecommendations(items) {
+            document.getElementById('recommendations').innerHTML = items.map(item => `<p>${item}</p>`).join('');
+        }
+
+        function titleCase(value) {
+            return String(value).replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+        }
     </script>
 </body>
 
