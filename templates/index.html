@@ -36,6 +36,7 @@
             <label class="backend-select">
                 <span>Localization Backend</span>
                 <select id="backendSelect">
+                    <option value="provided">Fast Saliency</option>
                     <option value="sun_ica">SUN + ICA</option>
                     <option value="opencv">OpenCV Saliency</option>
                     <option value="gradcam">GradCAM</option>
@@ -62,7 +63,7 @@
 
             <section class="metrics-grid">
                 <article class="metric-card accent">
-                    <span>Confidence</span>
+                    <span>Damage Class</span>
                     <strong id="confidenceMetric">--%</strong>
                     <div class="mini-bar"><i id="confidenceBar"></i></div>
                 </article>
@@ -240,20 +241,22 @@
         });
 
         function renderDashboard(data) {
-            const pred = data.disaster_type;
+            const pred = data.informativeness || data.disaster_type;
+            const damagePred = data.damage || {};
             const damage = data.damage_assessment;
+            const context = data.disaster_context || { label: 'unknown' };
             uploadPanel.hidden = true;
             dashboard.hidden = false;
-            document.getElementById('mainPrediction').textContent = titleCase(pred.prediction);
+            document.getElementById('mainPrediction').textContent = titleCase(context.label);
             document.getElementById('disasterDescription').textContent = data.disaster_description;
-            document.getElementById('confidenceMetric').textContent = `${pred.confidence}%`;
-            document.getElementById('confidenceBar').style.width = `${pred.confidence}%`;
+            document.getElementById('confidenceMetric').textContent = titleCase(damagePred.prediction || 'unknown');
+            document.getElementById('confidenceBar').style.width = `${damagePred.confidence || 0}%`;
             document.getElementById('demMetric').textContent = damage.dem_score;
             document.getElementById('severityMetric').textContent = damage.severity_level;
             document.getElementById('areaMetric').textContent = `${damage.affected_area_percentage}%`;
             document.getElementById('regionsMetric').textContent = `${damage.damaged_region_count} regions`;
             document.getElementById('timeMetric').textContent = `${data.processing_time_ms} ms`;
-            document.getElementById('fusionDimMetric').textContent = `${pred.feature_dim} features`;
+            document.getElementById('fusionDimMetric').textContent = `${damagePred.confidence || pred.confidence}% damage confidence`;
             document.getElementById('ringValue').textContent = Math.round(damage.dem_score);
             document.getElementById('ringLabel').textContent = damage.severity_level;
             document.getElementById('demRing').style.setProperty('--value', `${damage.dem_score}%`);

@@ -84,6 +84,10 @@ class DamageLocalizationAnalyzer:
         saliency_map: np.ndarray | None = None,
         disaster_label: str = "unknown",
         localization_backend: str | None = None,
+        lbp_texture_map: np.ndarray | None = None,
+        lbp_statistics: Dict[str, float] | None = None,
+        damage_prediction: str | None = None,
+        damage_confidence: float | None = None,
     ) -> DamageAssessmentResult:
         backend_name = localization_backend or self.localization_backend
         loc = self._localize(img_rgb, saliency_map, backend_name)
@@ -97,7 +101,7 @@ class DamageLocalizationAnalyzer:
         avg_activation = float(activation.mean())
         compactness = float(np.mean([region.compactness for region in regions])) if regions else 0.0
         boundary_complexity = float(np.mean([region.boundary_complexity for region in regions])) if regions else 0.0
-        texture_entropy = self._texture_entropy(img_rgb, mask)
+        texture_entropy = self._texture_entropy(img_rgb, mask, lbp_texture_map, lbp_statistics)
         localization_confidence = float(np.clip(loc.confidence * 3.0, 0.0, 1.0))
         localization = self._localization_score(affected, density, len(regions), compactness, localization_confidence)
         dem = self._dem_score(
@@ -113,6 +117,8 @@ class DamageLocalizationAnalyzer:
             avg_activation,
             disaster_label,
         )
+        guard_metadata = self._underclassification_guard(dem, damage_prediction, damage_confidence)
+        dem = float(guard_metadata["adjusted_score"])
         severity = self._severity_label(dem)
         centroid = self._weighted_centroid(regions)
         ddm = self._create_ddm_overlay(img_rgb, activation, mask, regions)
@@ -140,7 +146,7 @@ class DamageLocalizationAnalyzer:
             boundaries=[region.bbox for region in regions],
             impact_estimates=estimates,
             emergency_recommendations=recommendations,
-            backend_metadata=loc.metadata,
+            backend_metadata={**loc.metadata, "dem_underclassification_guard": guard_metadata},
         )
 
     def _localize(self, img_rgb: np.ndarray, saliency_map: np.ndarray | None, backend_name: str) -> LocalizationResult:
@@ -277,21 +283,61 @@ class DamageLocalizationAnalyzer:
             cv2.circle(output, (int(region.centroid[0]), int(region.centroid[1])), 4, (20, 255, 180), -1)
         return output.astype(np.uint8)
 
-    def _texture_entropy(self, img_rgb: np.ndarray, mask: np.ndarray) -> float:
-        lbp = self.lbp.extract_from_rgb(img_rgb)
-        texture = lbp.texture_map
+    def _texture_entropy(
+        self,
+        img_rgb: np.ndarray,
+        mask: np.ndarray,
+        lbp_texture_map: np.ndarray | None = None,
+        lbp_statistics: Dict[str, float] | None = None,
+    ) -> float:
+        if lbp_texture_map is None or lbp_statistics is None:
+            lbp = self.lbp.extract_from_rgb(img_rgb)
+            texture = lbp.texture_map
+            stats = lbp.statistics
+        else:
+            texture = lbp_texture_map
+            stats = lbp_statistics
         if texture.shape != mask.shape:
             if cv2 is not None:
                 texture = cv2.resize(texture, (mask.shape[1], mask.shape[0]))
             else:
-                return float(lbp.statistics["entropy"] / 4.0)
+                return float(stats["entropy"] / 4.0)
         if not np.any(mask):
-            return float(np.clip(lbp.statistics["entropy"] / 4.0, 0.0, 1.0))
+            return float(np.clip(stats["entropy"] / 4.0, 0.0, 1.0))
         values = texture[mask > 0]
         hist, _ = np.histogram(values, bins=16, range=(0.0, 1.0), density=False)
         hist = hist.astype(np.float32) / max(float(hist.sum()), 1.0)
         entropy = float(-np.sum(hist * np.log2(np.clip(hist, 1e-10, 1.0))) / np.log2(16))
         return float(np.clip(entropy, 0.0, 1.0))
+
+    @staticmethod
+    def _underclassification_guard(
+        dem_score: float,
+        damage_prediction: str | None,
+        damage_confidence: float | None,
+    ) -> Dict[str, object]:
+        """Conservatively lift DEM when a confident RF damage class is higher."""
+        label = (damage_prediction or "").lower()
+        confidence = float(damage_confidence or 0.0)
+        minimum_by_label = {
+            "mild": 20.01,
+            "severe": 40.01,
+        }
+        minimum = minimum_by_label.get(label)
+        adjusted = float(dem_score)
+        applied = False
+        if minimum is not None and confidence >= 0.65 and dem_score < minimum:
+            adjusted = minimum
+            applied = True
+        return {
+            "applied": applied,
+            "original_score": float(dem_score),
+            "adjusted_score": adjusted,
+            "damage_prediction": damage_prediction,
+            "damage_confidence": confidence,
+            "minimum_score": minimum,
+            "confidence_threshold": 0.65,
+        }
 
     def _dem_score(
         self,

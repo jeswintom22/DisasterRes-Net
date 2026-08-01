@@ -15,14 +15,15 @@ logic, and downstream artifact layout.
 
 from __future__ import annotations
 
+import concurrent.futures
+import hashlib
 import json
 import os
 import warnings
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
-import concurrent.futures
-import hashlib
 
 import joblib
 import mlflow
@@ -493,6 +494,7 @@ def extract_features_predictions_layer(
     image_paths: Sequence[str],
     batch_size: int = BATCH_SIZE,
     saliency_input: bool = False,
+    show_progress: bool = True,
 ) -> np.ndarray:
     """Extract 1000-dim features from the IRv2 predictions layer."""
     if model is None:
@@ -510,7 +512,7 @@ def extract_features_predictions_layer(
     handle = model.classif.register_forward_hook(hook_fn)
     features = []
     try:
-        for i in tqdm(range(0, len(image_paths), batch_size), desc="  L1/L2 features"):
+        for i in tqdm(range(0, len(image_paths), batch_size), desc="  L1/L2 features", disable=not show_progress):
             batch_paths = image_paths[i : i + batch_size]
             imgs_batch = []
 
@@ -542,6 +544,57 @@ def extract_features_predictions_layer(
     if features:
         return np.vstack(features)
     return np.zeros((len(image_paths), 1000), dtype=np.float32)
+
+
+def extract_features_predictions_from_arrays(
+    model,
+    images_rgb: Sequence[np.ndarray],
+    batch_size: int = BATCH_SIZE,
+    show_progress: bool = False,
+) -> np.ndarray:
+    """Extract 1000-dim features from in-memory RGB arrays for web inference."""
+    if model is None:
+        print("[ERROR] Model is None, cannot extract features")
+        return np.zeros((len(images_rgb), 1000), dtype=np.float32)
+
+    model.eval()
+    transform = get_transforms(train=False)
+    device = get_device()
+    predictions_features = []
+
+    def hook_fn(module, inputs, output):
+        predictions_features.append(output.detach().cpu().numpy())
+
+    handle = model.classif.register_forward_hook(hook_fn)
+    features = []
+    try:
+        for i in tqdm(range(0, len(images_rgb), batch_size), desc="  array CNN features", disable=not show_progress):
+            batch_images = images_rgb[i : i + batch_size]
+            imgs_batch = []
+
+            for img_rgb in batch_images:
+                try:
+                    img_pil = Image.fromarray(np.asarray(img_rgb, dtype=np.uint8))
+                    imgs_batch.append(transform(img_pil))
+                except Exception as exc:
+                    print(f"[WARN] Failed to transform in-memory image: {exc}. Using zero tensor.")
+                    imgs_batch.append(torch.zeros((3, 299, 299), dtype=torch.float32))
+
+            if imgs_batch:
+                imgs_tensor = torch.stack(imgs_batch).to(device)
+                if device.type == "cuda":
+                    imgs_tensor = imgs_tensor.half()
+                predictions_features.clear()
+                with torch.no_grad():
+                    _ = model(imgs_tensor)
+                if predictions_features:
+                    features.append(predictions_features[0])
+    finally:
+        handle.remove()
+
+    if features:
+        return np.vstack(features)
+    return np.zeros((len(images_rgb), 1000), dtype=np.float32)
 
 
 def extract_l2_features(
@@ -664,19 +717,7 @@ def extract_l1_l2_batched(
     return df1, df2
 
 
-def extract_glcm_features(image_path: str) -> np.ndarray:
-    try:
-        with Image.open(image_path) as img:
-            img = img.convert("L")
-            img = img.resize(IMG_SIZE, Image.Resampling.LANCZOS)
-            arr = np.asarray(img)
-    except UnidentifiedImageError as exc:
-        print(f"[WARN] Corrupt image skipped in GLCM: '{image_path}'. Reason: {exc}")
-        return np.zeros(20, dtype=np.float32)
-    except OSError as exc:
-        print(f"[WARN] Could not read image for GLCM '{image_path}': {exc}")
-        return np.zeros(20, dtype=np.float32)
-
+def _glcm_from_gray_array(arr: np.ndarray) -> np.ndarray:
     arr = (arr / 32).astype(np.uint8)
     arr = np.clip(arr, 0, 7)
     angles = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
@@ -693,6 +734,35 @@ def extract_glcm_features(image_path: str) -> np.ndarray:
         out.append(float(-np.sum(pmat * np.log2(p_safe))))
 
     return np.asarray(out, dtype=np.float32)
+
+
+def extract_glcm_features_from_rgb(img_rgb: np.ndarray) -> np.ndarray:
+    """Extract GLCM descriptors from an in-memory RGB image."""
+    try:
+        img = Image.fromarray(np.asarray(img_rgb, dtype=np.uint8)).convert("L")
+        img = img.resize(IMG_SIZE, Image.Resampling.LANCZOS)
+        arr = np.asarray(img)
+    except Exception as exc:
+        print(f"[WARN] Could not prepare in-memory image for GLCM: {exc}")
+        return np.zeros(20, dtype=np.float32)
+
+    return _glcm_from_gray_array(arr)
+
+
+def extract_glcm_features(image_path: str) -> np.ndarray:
+    try:
+        with Image.open(image_path) as img:
+            img = img.convert("L")
+            img = img.resize(IMG_SIZE, Image.Resampling.LANCZOS)
+            arr = np.asarray(img)
+    except UnidentifiedImageError as exc:
+        print(f"[WARN] Corrupt image skipped in GLCM: '{image_path}'. Reason: {exc}")
+        return np.zeros(20, dtype=np.float32)
+    except OSError as exc:
+        print(f"[WARN] Could not read image for GLCM '{image_path}': {exc}")
+        return np.zeros(20, dtype=np.float32)
+
+    return _glcm_from_gray_array(arr)
 
 
 def extract_lbp_features(image_path: str) -> np.ndarray:
@@ -892,16 +962,17 @@ def load_cached_feature_matrix(
 
 
 def _load_shared_feature_models() -> Tuple[torch.nn.Module, torch.nn.Module]:
-    if "l1" not in _shared_feature_models:
-        model_l1 = load_frozen_model(num_classes=1000)
-        model_l2 = load_frozen_model(num_classes=1000)
-        if model_l1 is None or model_l2 is None:
+    if "feature_extractor" not in _shared_feature_models:
+        model = load_frozen_model(num_classes=1000)
+        if model is None:
             raise RuntimeError("Could not initialize shared feature extractors")
-        _shared_feature_models["l1"] = model_l1
-        _shared_feature_models["l2"] = model_l2
-    return _shared_feature_models["l1"], _shared_feature_models["l2"]
+        _shared_feature_models["feature_extractor"] = model
+
+    model = _shared_feature_models["feature_extractor"]
+    return model, model
 
 
+@lru_cache(maxsize=len(OBJECTIVES))
 def _load_rf_bundle(objective: str):
     candidates = [
         (npath(MODEL_DIR, f"rf_{objective}_{FEATURE_PIPELINE}.joblib"),

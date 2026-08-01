@@ -24,6 +24,8 @@ DISASTER_DESCRIPTIONS = {
     "not_informative": "Image has limited disaster evidence; damage metrics should be reviewed cautiously.",
 }
 
+DISASTER_LABELS = ("earthquake", "flood", "hurricane", "wildfire", "landslide")
+
 
 def get_pipeline() -> HybridDisasterPipeline:
     global _pipeline
@@ -94,6 +96,19 @@ def _texture_stats_payload(stats: dict) -> dict:
     return {key: round(float(value), 4) for key, value in stats.items()}
 
 
+def _resolve_disaster_context(form, filename: str | None) -> dict:
+    candidates = [
+        ("form", form.get("disaster_type") or form.get("disaster_label") or form.get("disaster_context")),
+        ("filename", filename or ""),
+    ]
+    for source, value in candidates:
+        text = str(value or "").lower()
+        for label in DISASTER_LABELS:
+            if label in text:
+                return {"label": label, "source": source}
+    return {"label": "unknown", "source": "fallback"}
+
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
@@ -116,14 +131,20 @@ def predict():
     try:
         analysis = get_pipeline().analyze(original_rgb)
         predictions = analysis["predictions"]
-        disaster_prediction = predictions.get("informativeness") or next(iter(predictions.values()))
-        disaster_label = disaster_prediction.get("prediction", "unknown")
-        localization_backend = request.form.get("localization_backend", "sun_ica")
+        informativeness_prediction = predictions.get("informativeness") or next(iter(predictions.values()))
+        damage_prediction = predictions.get("damage", {})
+        disaster_context = _resolve_disaster_context(request.form, file.filename)
+        disaster_label = disaster_context["label"]
+        localization_backend = request.form.get("localization_backend", "provided")
         assessment = _damage_analyzer.assess(
             original_rgb,
             analysis["saliency"].saliency_map,
             disaster_label,
             localization_backend=localization_backend,
+            lbp_texture_map=analysis["lbp"].texture_map,
+            lbp_statistics=analysis["lbp"].statistics,
+            damage_prediction=damage_prediction.get("prediction"),
+            damage_confidence=damage_prediction.get("confidence"),
         )
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
@@ -134,9 +155,10 @@ def predict():
     saliency_overlay = heatmap_overlay(original_rgb, saliency_map, alpha=0.48)
 
     result = {
-        "disaster_type": _prediction_payload(disaster_prediction),
-        "informativeness": _prediction_payload(predictions.get("informativeness", disaster_prediction)),
-        "damage": _prediction_payload(predictions.get("damage", disaster_prediction)),
+        "disaster_type": _prediction_payload(informativeness_prediction),
+        "informativeness": _prediction_payload(predictions.get("informativeness", informativeness_prediction)),
+        "damage": _prediction_payload(predictions.get("damage", informativeness_prediction)),
+        "disaster_context": disaster_context,
         "damage_assessment": _damage_payload(assessment),
         "visualizations": {
             "original": image_to_data_url(original_rgb),

@@ -10,14 +10,11 @@ CNN + handcrafted features -> standardized fusion -> classifier head
 
 from __future__ import annotations
 
-import os
-import tempfile
 import time
 from dataclasses import dataclass
 from typing import Dict
 
 import numpy as np
-from PIL import Image
 
 from fusion.feature_fusion import fuse_feature_streams
 from preprocessing.lbp import LBPFeatureExtractor
@@ -27,8 +24,8 @@ from step3_classify import (
     OBJECTIVES,
     _load_rf_bundle,
     _load_shared_feature_models,
-    extract_features_predictions_layer,
-    extract_glcm_features,
+    extract_features_predictions_from_arrays,
+    extract_glcm_features_from_rgb,
 )
 
 
@@ -56,29 +53,13 @@ class HybridDisasterPipeline:
         saliency_output = self.saliency.process(img_rgb)
         lbp_output = self.lbp.extract_from_rgb(img_rgb)
 
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_original:
-            Image.fromarray(img_rgb.astype(np.uint8)).save(tmp_original.name, quality=95)
-            original_path = tmp_original.name
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_enhanced:
-            Image.fromarray(saliency_output.enhanced_rgb).save(tmp_enhanced.name, quality=95)
-            enhanced_path = tmp_enhanced.name
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_saliency:
-            Image.fromarray(saliency_to_rgb(saliency_output.saliency_map)).save(tmp_saliency.name, quality=95)
-            saliency_path = tmp_saliency.name
-
-        try:
-            predictions = self._predict_objectives(
-                original_path=original_path,
-                enhanced_path=enhanced_path,
-                saliency_path=saliency_path,
-                lbp_histogram=lbp_output.histogram,
-            )
-        finally:
-            for path in (original_path, enhanced_path, saliency_path):
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+        predictions = self._predict_objectives(
+            original_rgb=img_rgb,
+            enhanced_rgb=saliency_output.enhanced_rgb,
+            saliency_rgb=saliency_to_rgb(saliency_output.saliency_map),
+            lbp_histogram=lbp_output.histogram,
+            lbp_feature_vector=lbp_output.feature_vector,
+        )
 
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         return {
@@ -98,27 +79,34 @@ class HybridDisasterPipeline:
 
     def _predict_objectives(
         self,
-        original_path: str,
-        enhanced_path: str,
-        saliency_path: str,
+        original_rgb: np.ndarray,
+        enhanced_rgb: np.ndarray,
+        saliency_rgb: np.ndarray,
         lbp_histogram: np.ndarray,
+        lbp_feature_vector: np.ndarray,
     ) -> Dict[str, ObjectivePrediction]:
-        model_l1, model_l2 = _load_shared_feature_models()
+        model, _ = _load_shared_feature_models()
         predictions: Dict[str, ObjectivePrediction] = {}
+
+        cnn_features = extract_features_predictions_from_arrays(
+            model,
+            [enhanced_rgb, saliency_rgb],
+            batch_size=2,
+            show_progress=False,
+        )
+        df1 = cnn_features[:1]
+        df2 = cnn_features[1:2]
+        glcm = np.asarray([extract_glcm_features_from_rgb(original_rgb)], dtype=np.float32)
+        available_features = {
+            "cnn_original": df1,
+            "cnn_saliency": df2,
+            "glcm": glcm,
+            "lbp_hist": np.asarray([lbp_histogram], dtype=np.float32),
+            "lbp_stats": np.asarray([lbp_feature_vector], dtype=np.float32),
+        }
 
         for objective in OBJECTIVES:
             clf, le, scaler, feature_spec = _load_rf_bundle(objective)
-            df1 = extract_features_predictions_layer(model_l1, [enhanced_path], batch_size=1, saliency_input=False)
-            df2 = extract_features_predictions_layer(model_l2, [saliency_path], batch_size=1, saliency_input=False)
-            glcm = np.asarray([extract_glcm_features(original_path)], dtype=np.float32)
-            lbp_set = self.lbp.extract_from_path(original_path)
-            available_features = {
-                "cnn_original": df1,
-                "cnn_saliency": df2,
-                "glcm": glcm,
-                "lbp_hist": np.asarray([lbp_histogram], dtype=np.float32),
-                "lbp_stats": np.asarray([lbp_set.feature_vector], dtype=np.float32),
-            }
             fused, metadata = fuse_feature_streams(available_features, feature_spec)
             fused_scaled = scaler.transform(fused)
 
