@@ -22,6 +22,20 @@ EXPECTED_IMG_SIZE = (299, 299)
 MIN_IMAGES_PER_CLASS = 50
 
 
+def get_python_executable() -> str:
+    """Return venv Python executable if available, otherwise sys.executable."""
+    candidates = [
+        npath(ROOT_DIR, "venv", "Scripts", "python.exe"),
+        npath(ROOT_DIR, "venv", "bin", "python"),
+        npath(ROOT_DIR, ".venv", "Scripts", "python.exe"),
+        npath(ROOT_DIR, ".venv", "bin", "python"),
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return sys.executable
+
+
 def run_step(script_name: str) -> bool:
     script_path = npath(ROOT_DIR, script_name)
     if not os.path.isfile(script_path):
@@ -31,8 +45,9 @@ def run_step(script_name: str) -> bool:
     print("\n" + "=" * 80)
     print(f"RUNNING {script_name}")
     print("=" * 80)
+    py_exec = get_python_executable()
     try:
-        result = subprocess.run([sys.executable, script_path], cwd=ROOT_DIR, check=False)
+        result = subprocess.run([py_exec, script_path], cwd=ROOT_DIR, check=False)
     except OSError as exc:
         print(f"[ERROR] Failed to start '{script_name}': {exc}")
         print("[HINT] Ensure Python is installed and file permissions are valid.")
@@ -195,30 +210,65 @@ def main() -> int:
     print("DISASTERRES-NET PIPELINE RUNNER")
     print("=" * 80)
 
-    # if not run_step("step1_collect_data.py"):
-    #     return 1
-    # print_progress_summary("STEP 1")
+    venv_py = get_python_executable()
+    if venv_py != sys.executable:
+        try:
+            import mlflow
+        except ImportError:
+            print(f"[INFO] Active Python '{sys.executable}' lacks MLflow. Auto-switching to virtual environment '{venv_py}'...")
+            result = subprocess.run([venv_py] + sys.argv, cwd=ROOT_DIR, check=False)
+            return result.returncode
 
-    # if not run_step("step2_preprocess.py"):
-    #     return 1
-    # print_progress_summary("STEP 2")
+    try:
+        import mlflow
+        mlflow.set_tracking_uri("sqlite:///mlflow.db")
+        mlflow.set_experiment("DisasterRes-Net")
+        parent_run = mlflow.start_run(run_name="pipeline_run_all")
+        mlflow.set_tags({"pipeline": "end_to_end", "framework": "DisasterRes-Net"})
+    except Exception as exc:
+        parent_run = None
+        print(f"[WARN] Could not initialize parent MLflow run: {exc}")
 
-    ok, issues = validate_before_step3()
-    if not ok:
-        print("\n[ERROR] Validation before step3 failed. Fix the following issues:")
-        for issue in issues:
-            print(f"  - {issue}")
-        print("[HINT] Re-run step1 and step2 after fixing data issues.")
-        return 1
+    try:
+        if not run_step("step1_collect_data.py"):
+            return 1
+        print_progress_summary("STEP 1")
 
-    print("\n[OK] Validation passed: sufficient images, correct 299x299 sizes, and no empty split folders.")
+        if not run_step("step2_preprocess.py"):
+            return 1
+        print_progress_summary("STEP 2")
 
-    if not run_step("step3_classify.py"):
-        return 1
-    print_progress_summary("STEP 3")
+        ok, issues = validate_before_step3()
+        if not ok:
+            print("\n[ERROR] Validation before step3 failed. Fix the following issues:")
+            for issue in issues:
+                print(f"  - {issue}")
+            print("[HINT] Re-run step1 and step2 after fixing data issues.")
+            return 1
 
+<<<<<<< HEAD
+        print("\n[OK] Validation passed: sufficient images, correct 299x299 sizes, and no empty split folders.")
+
+        if not run_step("step3_classify.py"):
+            return 1
+        print_progress_summary("STEP 3")
+
+        if parent_run and mlflow:
+            accs = load_accuracy_results()
+            for obj, acc in accs.items():
+                mlflow.log_metric(f"pipeline_final_accuracy_{obj}", acc)
+            mlflow.log_param("status", "SUCCESS")
+            print("[INFO] Pipeline end-to-end metrics successfully logged to MLflow.")
+
+        print("\n[DONE] Pipeline finished successfully.")
+        return 0
+    finally:
+        if parent_run and mlflow:
+            mlflow.end_run()
+=======
     print("\n[DONE] Pipeline finished successfully.")
     return 0
+>>>>>>> e120bd49a75055a101fd5ab3f48210b6796114cb
 
 
 if __name__ == "__main__":

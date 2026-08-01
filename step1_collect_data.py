@@ -1,18 +1,19 @@
 """Step 1: collect and organize disaster images.
 
 This script:
-1) Organizes already extracted CrisisMMD images into raw_dataset classes.
-2) Optionally supplements data via icrawler (Google and Bing).
+1) Organizes CrisisMMD images into raw_dataset classes with unique names.
+2) Crawls missing images via icrawler if any class is below target threshold.
+3) Filters out tiny / corrupted images.
+4) Logs complete data collection metrics and metadata to MLflow.
 
 Windows compatibility:
 - Every constructed path is normalized with os.path.normpath.
-- Temporary crawler directories are created explicitly to avoid WinError 3.
 """
 
 import csv
+import json
 import os
 import shutil
-import time
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from tqdm import tqdm
@@ -25,43 +26,9 @@ def npath(*parts: str) -> str:
 
 SAVE_DIR = npath("raw_dataset")
 DOWNLOADS_DIR = npath(SAVE_DIR, "_downloads")
-TMP_DIR = npath(SAVE_DIR, "_tmp")
-IMAGES_PER_KW = 80
 MIN_EDGE = 100
 
 DISASTER_CLASSES = ["earthquake", "flood", "hurricane", "wildfire", "landslide", "not_disaster"]
-
-KEYWORDS: Dict[str, List[str]] = {
-    "earthquake": [
-        "earthquake building damage",
-        "collapsed building earthquake",
-        "earthquake rescue",
-    ],
-    "flood": [
-        "flood disaster damage",
-        "flooded roads and homes",
-        "flood rescue operation",
-    ],
-    "hurricane": [
-        "hurricane damage destruction",
-        "cyclone aftermath",
-        "storm surge destruction",
-    ],
-    "wildfire": [
-        "wildfire burning homes",
-        "forest fire destruction",
-        "wildfire smoke evacuation",
-    ],
-    "landslide": [
-        "landslide road damage",
-        "mudslide disaster",
-    ],
-    "not_disaster": [
-        "normal city street",
-        "people in park sunny day",
-        "clean residential neighborhood",
-    ],
-}
 
 
 def ensure_dirs() -> None:
@@ -72,7 +39,6 @@ def ensure_dirs() -> None:
             print(f"[ERROR] Could not create class directory for '{cls_name}': {exc}")
     try:
         os.makedirs(DOWNLOADS_DIR, exist_ok=True)
-        os.makedirs(TMP_DIR, exist_ok=True)
     except OSError as exc:
         print(f"[ERROR] Could not create support directories: {exc}")
 
@@ -100,24 +66,6 @@ def _safe_copy(src: str, dst: str) -> bool:
     except (OSError, shutil.Error) as exc:
         print(f"[WARN] Copy failed: '{src}' -> '{dst}'. Reason: {exc}")
         return False
-
-
-def _safe_move(src: str, dst: str) -> bool:
-    try:
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.move(npath(src), npath(dst))
-        return True
-    except (OSError, shutil.Error) as exc:
-        print(f"[WARN] Move failed: '{src}' -> '{dst}'. Reason: {exc}")
-        return False
-
-
-def _safe_remove_tree(path: str) -> None:
-    try:
-        if os.path.isdir(path):
-            shutil.rmtree(npath(path), ignore_errors=True)
-    except OSError as exc:
-        print(f"[WARN] Could not remove temporary directory '{path}': {exc}")
 
 
 def _pick_existing_file(paths: Sequence[str]) -> Optional[str]:
@@ -181,12 +129,7 @@ def _get_first_nonempty(row: dict, columns: Sequence[str]) -> str:
 
 
 def organize_crisismmd() -> Dict[str, int]:
-    """Copy CrisisMMD images into raw_dataset classes.
-
-    Logic:
-    - If image informativeness is not_informative -> not_disaster
-    - Else map event path to disaster class (earthquake/flood/...)
-    """
+    """Copy CrisisMMD images into raw_dataset classes using unique names."""
     stats = {cls_name: 0 for cls_name in DISASTER_CLASSES}
     crisis_dir = find_crisismmd_dir()
     if crisis_dir is None:
@@ -244,9 +187,6 @@ def organize_crisismmd() -> Dict[str, int]:
         info_any = ["image_info", "label_image", "label", "text_info"]
         if not any(col in available_cols for col in required_any) or not any(col in available_cols for col in info_any):
             print("[ERROR] TSV columns do not match expected schema.")
-            print("[ERROR] Expected one image path column from: image_path, image, tweet_image, image_id")
-            print("[ERROR] Expected one label column from: image_info, label_image, label, text_info")
-            print(f"[ERROR] Found columns: {available_cols}")
             continue
 
         for row in tqdm(rows, desc="  Copying CrisisMMD images"):
@@ -277,9 +217,14 @@ def organize_crisismmd() -> Dict[str, int]:
                 skipped_total += 1
                 continue
 
-            dst_name = os.path.basename(src_img)
+            clean_stem = image_rel.strip().replace("/", "_").replace("\\", "_")
+            if not clean_stem.lower().endswith((".jpg", ".jpeg", ".png")):
+                clean_stem += ".jpg"
+            dst_name = f"crisismmd_{clean_stem}"
             dst_path = npath(SAVE_DIR, target_cls, dst_name)
+
             if os.path.isfile(dst_path):
+                stats[target_cls] += 1
                 continue
 
             if _safe_copy(src_img, dst_path):
@@ -288,101 +233,64 @@ def organize_crisismmd() -> Dict[str, int]:
             else:
                 skipped_total += 1
 
-    print(f"[INFO] CrisisMMD copy summary: copied={copied_total}, skipped={skipped_total}")
+    print(f"[INFO] CrisisMMD copy summary: new_copied={copied_total}, skipped={skipped_total}")
     return stats
 
 
-def _move_crawler_images(src_dir: str, dst_dir: str, prefix: str) -> int:
-    moved = 0
-    if not os.path.isdir(src_dir):
-        return moved
+def crawl_missing_classes(target_min: int = 100) -> Dict[str, int]:
+    """Use icrawler (BingImageCrawler) to supplement classes below target_min images."""
+    crawled_stats: Dict[str, int] = {cls_name: 0 for cls_name in DISASTER_CLASSES}
     try:
-        names = os.listdir(src_dir)
-    except OSError as exc:
-        print(f"[WARN] Could not list temporary crawler directory '{src_dir}': {exc}")
-        return moved
-
-    for name in names:
-        if not is_image_file(name):
-            continue
-        src = npath(src_dir, name)
-        dst = npath(dst_dir, f"{prefix}{name}")
-        if _safe_move(src, dst):
-            moved += 1
-    _safe_remove_tree(src_dir)
-    return moved
-
-
-def collect_via_icrawler() -> Dict[str, int]:
-    """Collect extra images via Google and Bing crawlers."""
-    stats = {cls_name: 0 for cls_name in DISASTER_CLASSES}
-    try:
-        from icrawler.builtin import BingImageCrawler, GoogleImageCrawler
+        from icrawler.builtin import BingImageCrawler
     except ImportError:
-        print("[WARN] icrawler not installed. Install with: pip install icrawler")
-        return stats
+        print("[WARN] icrawler package not installed. Skipping web image crawling.")
+        return crawled_stats
 
-    for category, query_list in KEYWORDS.items():
-        dst_dir = npath(SAVE_DIR, category)
-        try:
-            os.makedirs(dst_dir, exist_ok=True)
-        except OSError as exc:
-            print(f"[ERROR] Could not create destination directory '{dst_dir}': {exc}")
+    counts = dataset_counts()
+    for cls_name in DISASTER_CLASSES:
+        current = counts.get(cls_name, 0)
+        needed = target_min - current
+        if needed <= 0:
             continue
 
-        print(f"[INFO] Collecting category: {category}")
-        for query in query_list:
-            google_tmp = npath(TMP_DIR, "google", category)
-            bing_tmp = npath(TMP_DIR, "bing", category)
-            try:
-                os.makedirs(google_tmp, exist_ok=True)
-                os.makedirs(bing_tmp, exist_ok=True)
-            except OSError as exc:
-                print(f"[ERROR] Could not create temp folders for '{category}': {exc}")
-                continue
+        print(f"[INFO] Class '{cls_name}' has {current} images (target: {target_min}). Crawling {needed} images...")
+        save_cat_dir = npath(SAVE_DIR, cls_name)
+        os.makedirs(save_cat_dir, exist_ok=True)
+        keyword = f"{cls_name} disaster photo" if cls_name != "not_disaster" else "everyday street photo"
+        try:
+            crawler = BingImageCrawler(storage={"root_dir": save_cat_dir}, log_level=30)
+            crawler.crawl(keyword=keyword, max_num=needed)
+            new_counts = dataset_counts()
+            added = new_counts.get(cls_name, 0) - current
+            crawled_stats[cls_name] = max(0, added)
+            print(f"[INFO] Crawled {added} new images for '{cls_name}'.")
+        except Exception as exc:
+            print(f"[WARN] BingImageCrawler failed for '{cls_name}': {exc}")
 
-            try:
-                google = GoogleImageCrawler(storage={"root_dir": npath(google_tmp)}, log_level=50)
-                google.crawl(keyword=query, max_num=IMAGES_PER_KW // 2, file_idx_offset="auto")
-                moved_g = _move_crawler_images(google_tmp, dst_dir, f"g_{category}_")
-                stats[category] += moved_g
-                print(f"  Google '{query}': moved {moved_g}")
-            except Exception as exc:
-                print(f"[WARN] Google crawl failed for '{query}': {exc}")
-                _safe_remove_tree(google_tmp)
-
-            try:
-                bing = BingImageCrawler(storage={"root_dir": npath(bing_tmp)}, log_level=50)
-                bing.crawl(keyword=query, max_num=IMAGES_PER_KW // 2, file_idx_offset="auto")
-                moved_b = _move_crawler_images(bing_tmp, dst_dir, f"b_{category}_")
-                stats[category] += moved_b
-                print(f"  Bing   '{query}': moved {moved_b}")
-            except Exception as exc:
-                print(f"[WARN] Bing crawl failed for '{query}': {exc}")
-                _safe_remove_tree(bing_tmp)
-
-            time.sleep(1)
-    return stats
+    return crawled_stats
 
 
 def remove_tiny_images() -> int:
+    print("[INFO] Filtering tiny/corrupted images from raw_dataset...")
     removed = 0
+    from PIL import Image
+
     for cls_name in DISASTER_CLASSES:
         class_dir = npath(SAVE_DIR, cls_name)
         if not os.path.isdir(class_dir):
             continue
         try:
-            names = os.listdir(class_dir)
+            names = [n for n in os.listdir(class_dir) if is_image_file(n)]
         except OSError as exc:
             print(f"[WARN] Could not read directory '{class_dir}': {exc}")
             continue
 
-        for name in names:
-            if not is_image_file(name):
-                continue
+        for name in tqdm(names, desc=f"  Filtering {cls_name:14s}", leave=False):
             img_path = npath(class_dir, name)
             try:
-                from PIL import Image
+                file_size = os.path.getsize(img_path)
+                if file_size >= 10 * 1024:
+                    continue
 
                 with Image.open(img_path) as img:
                     width, height = img.size
@@ -415,23 +323,23 @@ def dataset_counts() -> Dict[str, int]:
 
 def main() -> int:
     print("=" * 60)
-    print("STEP 1: DATA COLLECTION")
+    print("STEP 1: DATA COLLECTION & MLFLOW LOGGING")
     print("=" * 60)
 
     ensure_dirs()
 
     crisis_stats = organize_crisismmd()
-    crawl_stats = collect_via_icrawler()
+    crawled_stats = crawl_missing_classes(target_min=100)
     tiny_removed = remove_tiny_images()
 
     final_counts = dataset_counts()
-    print("\n[SUMMARY] CrisisMMD copied per class:")
+    print("\n[SUMMARY] CrisisMMD images processed per class:")
     for cls_name in DISASTER_CLASSES:
         print(f"  {cls_name:14s}: {crisis_stats.get(cls_name, 0)}")
 
-    print("\n[SUMMARY] icrawler added per class:")
+    print("\n[SUMMARY] Crawled images per class:")
     for cls_name in DISASTER_CLASSES:
-        print(f"  {cls_name:14s}: {crawl_stats.get(cls_name, 0)}")
+        print(f"  {cls_name:14s}: {crawled_stats.get(cls_name, 0)}")
 
     print("\n[SUMMARY] final raw_dataset counts:")
     total = 0
@@ -443,7 +351,48 @@ def main() -> int:
     print(f"  tiny_removed   : {tiny_removed}")
 
     if total < 400:
-        print("[WARN] Total images are below 400. Add more web collection if needed.")
+        print("[WARN] Total images are below 400.")
+
+    # MLflow tracking
+    try:
+        import mlflow
+        mlflow.set_tracking_uri("sqlite:///mlflow.db")
+        mlflow.set_experiment("DisasterRes-Net")
+
+        with mlflow.start_run(run_name="step1_data_collection"):
+            mlflow.set_tags({"step": "step1_data_collection", "framework": "DisasterRes-Net"})
+            mlflow.log_params({
+                "min_edge": MIN_EDGE,
+                "save_dir": SAVE_DIR,
+                "disaster_classes": ",".join(DISASTER_CLASSES),
+                "target_min_crawl": 100,
+            })
+            metrics_dict = {
+                "raw_images_total": float(total),
+                "tiny_images_removed": float(tiny_removed),
+            }
+            for cls_name, count in final_counts.items():
+                metrics_dict[f"raw_count_{cls_name}"] = float(count)
+            for cls_name, cnt in crisis_stats.items():
+                metrics_dict[f"crisismmd_count_{cls_name}"] = float(cnt)
+            for cls_name, cnt in crawled_stats.items():
+                metrics_dict[f"crawled_count_{cls_name}"] = float(cnt)
+
+            mlflow.log_metrics(metrics_dict)
+
+            summary_path = npath(SAVE_DIR, "step1_summary.json")
+            with open(summary_path, "w", encoding="utf-8") as fobj:
+                json.dump({
+                    "final_counts": final_counts,
+                    "crisis_stats": crisis_stats,
+                    "crawled_stats": crawled_stats,
+                    "tiny_removed": tiny_removed,
+                    "total": total
+                }, fobj, indent=2)
+            mlflow.log_artifact(summary_path)
+            print("[INFO] Step 1 data collection successfully logged to MLflow experiment 'DisasterRes-Net'.")
+    except Exception as exc:
+        print(f"[WARN] Could not log Step 1 run to MLflow: {exc}")
 
     return 0
 

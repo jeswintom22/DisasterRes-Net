@@ -1,4 +1,4 @@
-﻿"""Step 3: extract M1 features and train the paper-aligned classifier.
+"""Step 3: extract M1 features and train the paper-aligned classifier.
 
 Architecture:
   L1: IRv2 on original image -> DF1 (1000-dim ImageNet logits)
@@ -1067,7 +1067,7 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
     y_test = le.transform(test_labels)
 
     mlflow.set_tracking_uri("sqlite:///mlflow.db")
-    mlflow.set_experiment("DisasterRes-Net-M1-Paper")
+    mlflow.set_experiment("DisasterRes-Net")
 
     with mlflow.start_run(run_name=f"rf_{objective}"):
         mlflow.set_tags(
