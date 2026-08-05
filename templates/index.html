@@ -19,6 +19,34 @@
     </header>
 
     <main class="shell">
+        <section class="live-command" aria-labelledby="liveTitle">
+            <div class="live-command-head">
+                <div>
+                    <span class="eyebrow"><i class="fa-solid fa-satellite-dish"></i> Live Operations</span>
+                    <h2 id="liveTitle">Disaster Intelligence Feed</h2>
+                    <p id="liveStatus">Waiting for the first monitoring pass.</p>
+                </div>
+                <button class="primary-btn" id="monitorBtn"><i class="fa-solid fa-arrows-rotate"></i> Scan Now</button>
+            </div>
+            <div class="live-summary">
+                <div><span>Active incidents</span><strong id="eventCount">0</strong></div>
+                <div><span>Images assessed</span><strong id="imageCount">0</strong></div>
+                <div class="alert-summary"><span>Severe damage signals</span><strong id="urgentCount">0</strong></div>
+            </div>
+            <div class="live-grid">
+                <section class="incident-stream">
+                    <div class="stream-heading"><h3>Current incidents</h3><span class="live-pulse">Live</span></div>
+                    <div id="incidentList" class="incident-list"><p class="empty-state">No incident data yet.</p></div>
+                </section>
+                <section class="incident-workspace" id="incidentWorkspace" aria-live="polite">
+                    <div class="stream-heading"><h3>Incident investigation</h3><span id="evidenceState">Select an incident</span></div>
+                    <div id="incidentDetail" class="incident-detail"><p class="empty-state">Select an incident to search its social imagery and run live damage assessment.</p></div>
+                    <div id="jobTimeline" class="job-timeline" hidden></div>
+                    <div id="evidenceList" class="evidence-list"></div>
+                </section>
+            </div>
+        </section>
+
         <section class="upload-panel" id="uploadPanel">
             <div class="drop-zone" id="dropZone">
                 <i class="fa-solid fa-cloud-arrow-up"></i>
@@ -168,8 +196,24 @@
         const compareTop = document.getElementById('compareTop');
         const themeToggle = document.getElementById('themeToggle');
         const backendSelect = document.getElementById('backendSelect');
+        const monitorBtn = document.getElementById('monitorBtn');
         let selectedFile = null;
         let latestResult = null;
+        let selectedIncident = null;
+        let incidentPollTimer = null;
+        let incidentPollActive = false;
+        let latestLiveEvents = [];
+
+        monitorBtn.addEventListener('click', async () => {
+            monitorBtn.disabled = true;
+            document.getElementById('liveStatus').textContent = 'Monitoring sources are being checked in the background.';
+            try {
+                await fetch('/api/live/refresh', { method: 'POST' });
+                await refreshLiveFeed();
+            } finally {
+                window.setTimeout(() => { monitorBtn.disabled = false; }, 1000);
+            }
+        });
 
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
             dropZone.addEventListener(evt, event => event.preventDefault());
@@ -334,6 +378,135 @@
         function renderRecommendations(items) {
             document.getElementById('recommendations').innerHTML = items.map(item => `<p>${item}</p>`).join('');
         }
+
+        function safeText(value) {
+            return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+        }
+
+        function eventTime(value) {
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? 'Time unavailable' : date.toLocaleString();
+        }
+
+        async function refreshLiveFeed() {
+            try {
+                const response = await fetch('/api/live/incidents');
+                if (!response.ok) return;
+                const data = await response.json();
+                document.getElementById('eventCount').textContent = data.summary.active_events;
+                document.getElementById('imageCount').textContent = data.summary.images_assessed;
+                document.getElementById('urgentCount').textContent = data.summary.urgent_damage;
+                document.getElementById('liveStatus').textContent = data.monitor_active
+                    ? 'Monitoring sources and incoming imagery now.'
+                    : data.updated_at ? `Last source scan: ${eventTime(data.updated_at)}` : 'Choose Scan Now to query live disaster sources.';
+                document.getElementById('evidenceState').textContent = `${data.summary.images_assessed} assessed`;
+                latestLiveEvents = data.events;
+                renderIncidents(latestLiveEvents);
+                if (selectedIncident) pollSelectedIncident();
+            } catch (_) {
+                document.getElementById('liveStatus').textContent = 'Live feed is temporarily unavailable.';
+            }
+        }
+
+        function renderIncidents(events) {
+            const root = document.getElementById('incidentList');
+            if (!events.length) {
+                root.innerHTML = '<p class="empty-state">No current incidents have been published. Run a scan to check the configured live sources.</p>';
+                return;
+            }
+            const visibleEvents = events.slice(0, 12);
+            root.innerHTML = visibleEvents.map(event => `
+                <button class="incident-item ${selectedIncident?.event_id === event.event_id ? 'selected' : ''}" type="button" aria-pressed="${selectedIncident?.event_id === event.event_id}">
+                    <div class="incident-icon ${safeText(event.disaster_class)}"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                    <div><div class="incident-title"><strong>${titleCase(event.disaster_class)}</strong><span>${safeText(event.source)}</span></div>
+                    <p>${safeText(event.place_name || event.title)}</p><small>${eventTime(event.event_time)}${event.magnitude_or_severity ? ` | Severity ${safeText(event.magnitude_or_severity)}` : ''}</small></div>
+                </button>`).join('');
+            root.querySelectorAll('.incident-item').forEach((button, index) => {
+                button.addEventListener('click', () => selectIncident(visibleEvents[index]));
+            });
+        }
+
+        async function selectIncident(event) {
+            if (incidentPollTimer) window.clearTimeout(incidentPollTimer);
+            selectedIncident = event;
+            renderIncidents(latestLiveEvents);
+            renderIncidentWorkspace({ status: 'locating', stage: 1, message: 'Starting incident investigation' }, []);
+            try {
+                const response = await fetch(`/api/live/incidents/${encodeURIComponent(event.event_id)}/analyze`, { method: 'POST' });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Incident analysis could not start');
+                renderIncidentWorkspace(data.job, data.assessments || []);
+                pollSelectedIncident();
+            } catch (error) {
+                renderIncidentWorkspace({ status: 'failed', stage: 5, message: error.message }, []);
+            }
+        }
+
+        async function pollSelectedIncident() {
+            if (!selectedIncident || incidentPollActive) return;
+            const eventId = selectedIncident.event_id;
+            incidentPollActive = true;
+            try {
+                const response = await fetch(`/api/live/incidents/${encodeURIComponent(eventId)}/analysis`);
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Incident analysis is unavailable');
+                if (!selectedIncident || selectedIncident.event_id !== eventId) return;
+                renderIncidentWorkspace(data.job, data.assessments || []);
+                if (['locating', 'searching', 'validating', 'classifying'].includes(data.job.status)) {
+                    incidentPollTimer = window.setTimeout(pollSelectedIncident, 1400);
+                } else {
+                    incidentPollTimer = null;
+                }
+            } catch (error) {
+                if (selectedIncident && selectedIncident.event_id === eventId) {
+                    renderIncidentWorkspace({ status: 'failed', stage: 5, message: error.message }, []);
+                }
+            } finally {
+                incidentPollActive = false;
+            }
+        }
+
+        function renderIncidentWorkspace(job, items) {
+            const detail = document.getElementById('incidentDetail');
+            const timeline = document.getElementById('jobTimeline');
+            const activeStages = ['Locate', 'Search', 'Validate', 'Classify', 'Complete'];
+            document.getElementById('evidenceState').textContent = titleCase(job.status || 'idle');
+            if (selectedIncident) {
+                detail.innerHTML = `<div class="selected-event"><div><span class="eyebrow">${safeText(selectedIncident.source)}</span><h4>${titleCase(selectedIncident.disaster_class)}</h4><p>${safeText(selectedIncident.place_name || selectedIncident.title)}</p></div><small>${eventTime(selectedIncident.event_time)}${selectedIncident.magnitude_or_severity ? ` | Severity ${safeText(selectedIncident.magnitude_or_severity)}` : ''}</small></div><p class="job-message ${safeText(job.status)}">${safeText(job.message || 'Ready to investigate')}</p>`;
+                timeline.hidden = false;
+                timeline.innerHTML = activeStages.map((stage, index) => `<div class="job-stage ${index + 1 < job.stage ? 'done' : ''} ${index + 1 === job.stage ? 'active' : ''}"><i class="fa-solid ${index + 1 < job.stage ? 'fa-check' : 'fa-circle'}"></i><span>${stage}</span></div>`).join('');
+            }
+            const root = document.getElementById('evidenceList');
+            if (!items.length) {
+                root.innerHTML = ['locating', 'searching', 'validating', 'classifying'].includes(job.status)
+                    ? '<div class="evidence-skeleton"><span></span><span></span><span></span></div>'
+                    : job.status === 'blocked' ? `<p class="empty-state">${safeText(job.message)}</p>`
+                    : job.status === 'no_imagery' ? '<p class="empty-state">This search returned no validated incident imagery. The incident record remains available for a later scan.</p>'
+                    : job.status === 'failed' ? `<p class="empty-state">${safeText(job.message)}</p>`
+                    : '<p class="empty-state">No incident-specific imagery has been assessed yet.</p>';
+                return;
+            }
+            root.innerHTML = items.map(item => `
+                <button class="evidence-card ${item.urgent ? 'urgent' : ''}" type="button">
+                    <img src="${safeText(item.image_url)}" alt="Live disaster evidence">
+                    <div class="evidence-copy"><div><span class="severity-pill">${titleCase(item.severity_level)}</span><span class="source-tag">${safeText(item.event_source)}</span></div>
+                    <strong>${titleCase(item.disaster_class)} | ${titleCase(item.damage_class)} damage</strong>
+                    <p>${safeText(item.place_name)}</p>
+                    <small>DEM ${safeText(item.dem_score)} | affected ${safeText(item.affected_area_percentage)}% | model confidence ${safeText(item.damage_confidence)}%</small></div>
+                </button>`).join('');
+            root.querySelectorAll('.evidence-card').forEach((card, index) => {
+                card.addEventListener('click', () => openLiveAssessment(items[index]));
+            });
+        }
+
+        function openLiveAssessment(item) {
+            latestResult = { ...item.analysis, disaster_context: { label: item.disaster_class, source: 'live incident' } };
+            renderDashboard(latestResult);
+            document.getElementById('dashboard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        refreshLiveFeed();
+        window.setInterval(refreshLiveFeed, 15000);
 
         function titleCase(value) {
             return String(value).replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());

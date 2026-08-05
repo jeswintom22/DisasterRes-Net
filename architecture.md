@@ -22,6 +22,11 @@ Image inputs are transformed into CNN original/saliency streams, GLCM descriptor
 ## M2 Localization
 Backends: `sun_ica`, `opencv`, `gradcam`, `gradcam_plus_plus`, `scorecam`. Each backend produces a normalized activation map consumed by the same DDM/DEM analyzer.
 
+## Live Incident Analysis
+`CoordinatorAgent` publishes current events to `results/live_disaster_events.json`. The Flask dashboard exposes a targeted per-event job API: selecting an incident starts a locate, social-search, validation, and classification workflow for that event ID, independent of dataset balancing.
+
+Validated social images retain event provenance in `raw_dataset/step0_provenance.csv`. New images pass through the same hybrid M1 prediction and M2 localization path as manual uploads; cached assessments are persisted in `results/live_image_assessments.json` and filtered by event ID before display. The browser polls an active event job only until it reaches complete, no-imagery, blocked, or failed state.
+
 ## DEM Equation
 DEM = 100 * severity_weight * (0.22A + 0.18D + 0.13L + 0.09R + 0.10C + 0.08K + 0.07B + 0.06T + 0.04Q + 0.03M), clipped to [0, 100].
 

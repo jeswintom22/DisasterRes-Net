@@ -195,6 +195,11 @@ def main() -> int:
     print("DISASTERRES-NET PIPELINE RUNNER")
     print("=" * 80)
 
+    if os.environ.get("DISASTERRES_RUN_AGENT", "0") == "1":
+        print("Running Step 0: Agentic disaster monitoring...")
+        if not run_step("step0_agent_monitor.py"):
+            return 1
+
     # if not run_step("step1_collect_data.py"):
     #     return 1
     # print_progress_summary("STEP 1")

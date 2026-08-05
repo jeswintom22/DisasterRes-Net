@@ -68,6 +68,14 @@ mlflow.db
 .cache/
 .pytest_cache/
 
+# Agentic monitoring runtime state and authenticated sessions
+.cache/twikit_cookies.json
+.cache/step0_agent_cache.sqlite3
+raw_dataset/step0_provenance.csv
+results/live_disaster_events.json
+results/live_image_assessments.json
+results/step0_react_trace.log
+
 # IDE
 .vscode/
 .idea/

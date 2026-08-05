@@ -58,6 +58,21 @@ Run the Flask research dashboard:
 
 python app.py
 
+## Live Incident Monitoring
+
+The dashboard can query the configured live disaster sources, then collect and assess social imagery for an incident selected from the **Current incidents** list.
+
+1. Create a dedicated X account for the project and copy `.env.example` to `.env`.
+2. Set `TWIKIT_USERNAME`, `TWIKIT_EMAIL`, and `TWIKIT_PASSWORD` in `.env`.
+3. Restart `python app.py` after changing `.env`; credentials are read when the Flask process starts.
+4. Open `http://127.0.0.1:5000`, select **Scan Now**, then select an incident card.
+
+The incident workspace advances through Locate, Search, Validate, and Classify. A valid image card opens the full hybrid-model analysis with saliency, LBP, DDM, damage mask, DEM, and emergency recommendations.
+
+If the workspace says social image search needs Twikit credentials, verify all three variables in `.env` are non-empty and restart the dashboard. The agent saves its X session in `.cache/twikit_cookies.json` after a successful login and observes the configured search cap and cooldown.
+
+If the workspace reports `CERTIFICATE_VERIFY_FAILED`, the HTTPS certificate chain was rejected before X login. Upgrade the local certificate bundle with `python -m pip install --upgrade certifi requests httpx twikit`, restart the dashboard, and retry. On a managed school or company network, ask the network administrator to install the proxy's root certificate in the Windows trusted-root store. Do not disable TLS certificate verification.
+
 ## Expected Outputs
 
 - saved_models contains Random Forest models, label encoders, scalers, and optional PyTorch checkpoints.
