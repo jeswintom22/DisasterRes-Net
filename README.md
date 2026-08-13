@@ -85,3 +85,4 @@ Existing `df1_df2_glcm_lbp` checkpoints remain usable. Retraining `step3_classif
 
 The loader resolves feature contracts from each scaler's `n_features_in_`, so mislabeled or legacy checkpoints fail with informative messages instead of silent 2036/2030 feature mismatches.
 
+-x-
