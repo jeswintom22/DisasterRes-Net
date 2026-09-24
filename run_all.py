@@ -264,8 +264,6 @@ def main() -> int:
     finally:
         if parent_run and mlflow:
             mlflow.end_run()
-    print("\n[DONE] Pipeline finished successfully.")   
-    return 0
 
 
 if __name__ == "__main__":

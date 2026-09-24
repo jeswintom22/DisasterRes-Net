@@ -96,7 +96,7 @@ GLCM_CACHE_DIR = npath(ROOT_DIR, ".cache")
 FEATURE_CACHE_DIR = npath(GLCM_CACHE_DIR, "feature_cache")
 IMG_SIZE = (299, 299)
 BATCH_SIZE = 64
-NUM_WORKERS = 0  # Windows-safe default
+NUM_WORKERS = max(0, int(os.getenv("DISASTERRES_NUM_WORKERS", "0")))  # Windows-safe default
 
 OBJECTIVES = ("informativeness", "damage")
 IMG_EXTS = (".jpg", ".jpeg", ".png")
@@ -159,6 +159,7 @@ def get_device():
     if _device is None and torch is not None:
         _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if _device.type == "cuda":
+            torch.backends.cudnn.benchmark = True
             print(f"[INFO] CUDA GPU detected: {torch.cuda.get_device_name(0)}")
         else:
             print("[WARN] No GPU found - running on CPU (slower).")
@@ -367,7 +368,7 @@ def _evaluate_one_epoch(model, loader, criterion, device) -> Tuple[float, float]
     total_correct = 0
     total_seen = 0
 
-    with torch.no_grad():
+    with torch.inference_mode():
         for images, labels in loader:
             images = images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
@@ -534,7 +535,7 @@ def extract_features_predictions_layer(
                 if device.type == "cuda":
                     imgs_tensor = imgs_tensor.half()
                 predictions_features.clear()
-                with torch.no_grad():
+                with torch.inference_mode():
                     _ = model(imgs_tensor)
                 if predictions_features:
                     features.append(predictions_features[0])
@@ -585,7 +586,7 @@ def extract_features_predictions_from_arrays(
                 if device.type == "cuda":
                     imgs_tensor = imgs_tensor.half()
                 predictions_features.clear()
-                with torch.no_grad():
+                with torch.inference_mode():
                     _ = model(imgs_tensor)
                 if predictions_features:
                     features.append(predictions_features[0])
@@ -630,7 +631,7 @@ def extract_l2_features(
                 sal_tensor = transform_eval(Image.fromarray(sal_rgb))
 
                 hook_outputs.clear()
-                with torch.no_grad():
+                with torch.inference_mode():
                     sal_input = sal_tensor.unsqueeze(0).to(device)
                     if device.type == "cuda":
                         sal_input = sal_input.half()
@@ -697,7 +698,7 @@ def extract_l1_l2_batched(
                 combined = combined.half()
 
             hook_outputs.clear()
-            with torch.no_grad():
+            with torch.inference_mode():
                 _ = model(combined)
 
             if hook_outputs:
