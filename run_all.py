@@ -246,7 +246,6 @@ def main() -> int:
             print("[HINT] Re-run step1 and step2 after fixing data issues.")
             return 1
 
-<<<<<<< HEAD
         print("\n[OK] Validation passed: sufficient images, correct 299x299 sizes, and no empty split folders.")
 
         if not run_step("step3_classify.py"):
@@ -265,10 +264,6 @@ def main() -> int:
     finally:
         if parent_run and mlflow:
             mlflow.end_run()
-=======
-    print("\n[DONE] Pipeline finished successfully.")
-    return 0
->>>>>>> e120bd49a75055a101fd5ab3f48210b6796114cb
 
 
 if __name__ == "__main__":

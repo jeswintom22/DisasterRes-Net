@@ -31,6 +31,15 @@ def image_to_data_url(img: np.ndarray, fmt: str = "JPEG", quality: int = 88) -> 
     return f"data:image/{mime};base64,{encoded}"
 
 
+def resize_rgb_to_max_edge(img_rgb: np.ndarray, max_edge: int) -> np.ndarray:
+    height, width = img_rgb.shape[:2]
+    largest_edge = max(height, width)
+    if max_edge <= 0 or largest_edge <= max_edge:
+        return img_rgb
+    scale = max_edge / float(largest_edge)
+    size = (max(1, round(width * scale)), max(1, round(height * scale)))
+    return np.asarray(Image.fromarray(img_rgb.astype(np.uint8)).resize(size, Image.Resampling.LANCZOS), dtype=np.uint8)
+
 def heatmap_overlay(img_rgb: np.ndarray, heatmap: np.ndarray, alpha: float = 0.48) -> np.ndarray:
     """Overlay a heatmap on an RGB image."""
     if cv2 is None:
