@@ -1,7 +1,7 @@
 ﻿import io
 
 import numpy as np
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 from PIL import Image
 
 from damage_assessment.localization import DamageLocalizationAnalyzer
@@ -112,6 +112,45 @@ def _resolve_disaster_context(form, filename: str | None) -> dict:
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html")
+
+
+@app.route("/chat")
+def chat_page():
+    return render_template("chat.html")
+
+
+@app.route("/healthz")
+def healthz():
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/chat", methods=["POST"])
+def chat():
+    data = request.get_json(silent=True) or {}
+    query = str(data.get("query", "")).strip()
+    if not query:
+        return jsonify({"error": "Empty query"}), 400
+    if len(query) > 600:
+        return jsonify({"error": "Query must be 600 characters or fewer"}), 400
+    from crew.runner import start_job
+    job = start_job(query)
+    return jsonify({"job_id": job.id, "query": query}), 202
+
+
+@app.route("/api/chat/stream/<job_id>")
+def chat_stream(job_id: str):
+    from crew.runner import get_job
+    job = get_job(job_id)
+    if job is None:
+        return jsonify({"error": "Unknown chat job"}), 404
+    def generate():
+        while True:
+            event = job.queue.get()
+            import json
+            yield f"data: {json.dumps(event)}\n\n"
+            if event.get("stage") in {"complete", "error"}:
+                break
+    return Response(stream_with_context(generate()), mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.route("/api/predict", methods=["POST"])

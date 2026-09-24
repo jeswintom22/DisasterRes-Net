@@ -12,3 +12,7 @@ tqdm==4.67.1
 Flask==3.1.2
 opencv-contrib-python==4.12.0.88
 scipy==1.16.1
+httpx==0.28.1
+# Optional LLM orchestration. The deterministic report path works without keys.
+crewai==1.15.0
+litellm==1.80.10
