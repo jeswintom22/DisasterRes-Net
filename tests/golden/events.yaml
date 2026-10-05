@@ -1,0 +1,10 @@
+- id: wayanad-2024-landslide
+  query: "Explain the disaster at Wayanad"
+  expect_location: {country: IN, admin: Kerala}
+  expect_event_type: landslide
+  expect_event_date_within: {from: 2024-07-25, to: 2024-08-05}
+  fixtures: [] # To be populated with local test images
+  expect_severity_in: [Severe, Critical]
+  expect_gate_rejects: 2
+  baseline_dem: 82.4
+  dem_tolerance: 8.0

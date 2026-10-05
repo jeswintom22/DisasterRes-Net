@@ -1,14 +1,20 @@
-﻿import io
+import io
+import os
+import time
 
 import numpy as np
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 from PIL import Image
 
 from damage_assessment.localization import DamageLocalizationAnalyzer
 from models.hybrid_pipeline import HybridDisasterPipeline
-from utils.image_io import heatmap_overlay, image_to_data_url
+from utils.image_io import heatmap_overlay, image_to_data_url, resize_rgb_to_max_edge
 
 app = Flask(__name__)
+MAX_UPLOAD_BYTES = int(os.getenv('DISASTERRES_MAX_UPLOAD_BYTES', str(12 * 1024 * 1024)))
+MAX_ANALYSIS_EDGE = int(os.getenv('DISASTERRES_MAX_ANALYSIS_EDGE', '1280'))
+MAX_RESPONSE_EDGE = int(os.getenv('DISASTERRES_MAX_RESPONSE_EDGE', '960'))
+app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_BYTES
 
 _pipeline: HybridDisasterPipeline | None = None
 _damage_analyzer = DamageLocalizationAnalyzer()
@@ -114,6 +120,46 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/chat")
+def chat_page():
+    return render_template("chat.html")
+
+
+@app.route("/healthz")
+def healthz():
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/chat", methods=["POST"])
+def chat():
+    data = request.get_json(silent=True) or {}
+    query = str(data.get("query", "")).strip()
+    image = data.get("image")
+    if not query and not image:
+        return jsonify({"error": "Empty query"}), 400
+    if len(query) > 600:
+        return jsonify({"error": "Query must be 600 characters or fewer"}), 400
+    from crew.runner import start_job
+    job = start_job(query, image_data=image)
+    return jsonify({"job_id": job.id, "query": query}), 202
+
+
+@app.route("/api/chat/stream/<job_id>")
+def chat_stream(job_id: str):
+    from crew.runner import get_job
+    job = get_job(job_id)
+    if job is None:
+        return jsonify({"error": "Unknown chat job"}), 404
+    def generate():
+        while True:
+            event = job.queue.get()
+            import json
+            yield f"data: {json.dumps(event)}\n\n"
+            if event.get("stage") in {"complete", "error"}:
+                break
+    return Response(stream_with_context(generate()), mimetype="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.route("/api/predict", methods=["POST"])
 def predict():
     if "file" not in request.files:
@@ -127,9 +173,12 @@ def predict():
         return jsonify({"error": f"Invalid image format: {exc}"}), 400
 
     original_rgb = np.array(img_pil, dtype=np.uint8)
+    analysis_rgb = resize_rgb_to_max_edge(original_rgb, MAX_ANALYSIS_EDGE)
+    response_rgb = resize_rgb_to_max_edge(analysis_rgb, MAX_RESPONSE_EDGE)
+    started = time.perf_counter()
 
     try:
-        analysis = get_pipeline().analyze(original_rgb)
+        analysis = get_pipeline().analyze(analysis_rgb)
         predictions = analysis["predictions"]
         informativeness_prediction = predictions.get("informativeness") or next(iter(predictions.values()))
         damage_prediction = predictions.get("damage", {})
@@ -137,7 +186,7 @@ def predict():
         disaster_label = disaster_context["label"]
         localization_backend = request.form.get("localization_backend", "provided")
         assessment = _damage_analyzer.assess(
-            original_rgb,
+            analysis_rgb,
             analysis["saliency"].saliency_map,
             disaster_label,
             localization_backend=localization_backend,
@@ -152,7 +201,7 @@ def predict():
     saliency_map = analysis["saliency"].saliency_map
     lbp_texture = analysis["lbp"].texture_map
     mask_rgb = np.repeat((assessment.damage_mask * 255).astype(np.uint8)[..., None], 3, axis=2)
-    saliency_overlay = heatmap_overlay(original_rgb, saliency_map, alpha=0.48)
+    saliency_overlay = heatmap_overlay(response_rgb, saliency_map, alpha=0.48)
 
     result = {
         "disaster_type": _prediction_payload(informativeness_prediction),
@@ -161,7 +210,7 @@ def predict():
         "disaster_context": disaster_context,
         "damage_assessment": _damage_payload(assessment),
         "visualizations": {
-            "original": image_to_data_url(original_rgb),
+            "original": image_to_data_url(response_rgb),
             "saliency": image_to_data_url((saliency_map * 255).astype(np.uint8), fmt="PNG"),
             "saliency_overlay": image_to_data_url(saliency_overlay),
             "lbp": image_to_data_url((lbp_texture * 255).astype(np.uint8), fmt="PNG"),
@@ -171,7 +220,9 @@ def predict():
             "enhanced": image_to_data_url(analysis["saliency"].enhanced_rgb),
         },
         "texture_statistics": _texture_stats_payload(analysis["lbp"].statistics),
-        "processing_time_ms": round(float(analysis["processing_time_ms"]), 2),
+        "processing_time_ms": round((time.perf_counter() - started) * 1000.0, 2),
+        "stage_timings_ms": {**analysis.get("stage_timings_ms", {}), "total_request": round((time.perf_counter() - started) * 1000.0, 2)},
+        "image_dimensions": {"uploaded": [int(original_rgb.shape[1]), int(original_rgb.shape[0])], "analysis": [int(analysis_rgb.shape[1]), int(analysis_rgb.shape[0])], "response": [int(response_rgb.shape[1]), int(response_rgb.shape[0])]},
         "model_info": analysis["model_info"],
         "prediction_breakdown": {
             "cnn_stream": "Saliency-attended RGB image passed through InceptionResNetV2.",

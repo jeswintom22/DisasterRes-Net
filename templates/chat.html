@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DisasterRes-Net Chat</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script><script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+</head>
+<body>
+  <header class="topbar"><div><h1>Disaster Investigation Chat</h1><p>Evidence-aware event briefing and visual damage analysis.</p></div><a class="ghost-btn" href="/">Analyse your own image</a></header>
+  <main class="shell"><section class="chat-panel" aria-live="polite">
+    <div id="messages" class="chat-messages"><article class="chat-bubble bot">Ask about a disaster location, for example “Explain the disaster at Wayanad”.</article></div>
+    <div id="steps" class="chat-steps" hidden></div>
+    <form id="chatForm" class="chat-form"><input id="query" maxlength="600" required placeholder="Type a disaster location query…" autocomplete="off"><button id="send" class="primary-btn">Send</button></form>
+  </section></main>
+  <script>
+    const form=document.querySelector('#chatForm'), input=document.querySelector('#query'), messages=document.querySelector('#messages'), steps=document.querySelector('#steps'), send=document.querySelector('#send');
+    const escape=s=>String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+    function add(text, kind, markdown=false){const node=document.createElement('article');node.className='chat-bubble '+kind;node.innerHTML=markdown?DOMPurify.sanitize(marked.parse(text)):escape(text);messages.append(node);messages.scrollTop=messages.scrollHeight;return node;}
+    function status(text){const node=document.createElement('p');node.className='chat-status';node.textContent=text;messages.append(node);messages.scrollTop=messages.scrollHeight;}
+    form.addEventListener('submit',async event=>{event.preventDefault();const query=input.value.trim();if(!query)return;add(query,'user');input.value='';send.disabled=true;steps.hidden=false;steps.textContent='Starting investigation…';try{const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query})}),data=await response.json();if(!response.ok)throw Error(data.error||'Could not start chat');const source=new EventSource('/api/chat/stream/'+data.job_id);source.onmessage=e=>{const item=JSON.parse(e.data);if(item.stage==='complete'){add(item.result.response,'bot',true);status('Report mode: '+(item.result.narration||'deterministic')+' · Images analysed: '+(item.result.facts?.images_analysed??0)+' · Images rejected: '+(item.result.facts?.images_rejected??0));source.close();send.disabled=false;steps.hidden=true;}else if(item.stage==='error'){add(item.message,'error');source.close();send.disabled=false;steps.hidden=true;}else steps.textContent=item.message;};source.onerror=()=>{source.close();send.disabled=false;};}catch(error){add(error.message,'error');send.disabled=false;steps.hidden=true;}});
+  </script>
+</body></html>

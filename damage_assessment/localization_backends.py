@@ -1,4 +1,4 @@
-﻿"""Configurable localization backends for DisasterRes-Net M2.
+"""Configurable localization backends for DisasterRes-Net M2.
 
 Backends return normalized activation maps in [0, 1]. The SUN+ICA backend is the
 paper-reproduction baseline; OpenCV saliency is the current lightweight backend;
@@ -156,8 +156,12 @@ class TorchCamBackend:
     def localize(self, img_rgb: np.ndarray) -> LocalizationResult:
         if torch is None or timm is None or transforms is None:
             raise RuntimeError("PyTorch, torchvision, and timm are required for CAM localization backends.")
-        model = self.model or self._load_default_model()
-        target_layer = self.target_layer or self._find_last_conv(model)
+        if self.model is None:
+            self.model = self._load_default_model()
+        model = self.model
+        if self.target_layer is None:
+            self.target_layer = self._find_last_conv(model)
+        target_layer = self.target_layer
         activation, confidence = self._cam(model, target_layer, img_rgb)
         return LocalizationResult(
             backend=self.name,

@@ -22,6 +22,8 @@ Primary data folders:
 - saved_models: Trained model artifacts.
 - results: Metrics and confusion matrices.
 
+For the full categorized layout, see [the directory guide](docs/DIRECTORY_GUIDE.md).
+
 ## Requirements
 
 Recommended Python: 3.10 (Windows).
@@ -79,7 +81,7 @@ The project now includes a modular research-grade hybrid pipeline:
 - `fusion/feature_fusion.py`: CNN + handcrafted feature concatenation metadata.
 - `models/hybrid_pipeline.py`: saliency-attended CNN inference plus LBP/GLCM fusion with checkpoint fallback.
 - `damage_assessment/localization.py`: M2 damage mask, connected regions, DDM, DEM, and impact estimates.
-- `HYBRID_RESEARCH_ARCHITECTURE.md`: architectural notes and checkpoint compatibility details.
+- `docs/research/HYBRID_RESEARCH_ARCHITECTURE.md`: architectural notes and checkpoint compatibility details.
 
 Existing `df1_df2_glcm_lbp` checkpoints remain usable. Retraining `step3_classify.py` creates the newer `df1_df2_glcm_lbp_stats` artifacts with LBP statistical descriptors included in the fused classifier input.
 

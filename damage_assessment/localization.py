@@ -1,4 +1,4 @@
-﻿"""M2 damage localization: backend-driven DDM generation and DEM scoring."""
+"""M2 damage localization: backend-driven DDM generation and DEM scoring."""
 
 from __future__ import annotations
 
@@ -77,6 +77,7 @@ class DamageLocalizationAnalyzer:
         self.threshold_percentile = threshold_percentile
         self.min_region_ratio = min_region_ratio
         self.lbp = LBPFeatureExtractor()
+        self._backends: Dict[str, object] = {}
 
     def assess(
         self,
@@ -153,7 +154,11 @@ class DamageLocalizationAnalyzer:
         if saliency_map is not None and backend_name in {"provided", "saliency"}:
             activation = normalize_map(saliency_map)
             return LocalizationResult("provided_saliency", activation, float(np.std(activation)), {"source": "caller"})
-        backend = get_localization_backend(backend_name)
+        normalized_name = backend_name.lower().replace('-', '_')
+        backend = self._backends.get(normalized_name)
+        if backend is None:
+            backend = get_localization_backend(backend_name)
+            self._backends[normalized_name] = backend
         return backend.localize(img_rgb)
 
     def _threshold_for_disaster(self, disaster_label: str) -> float:
