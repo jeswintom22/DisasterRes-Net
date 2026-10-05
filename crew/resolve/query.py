@@ -19,10 +19,18 @@ def resolve_query(query: str) -> ResolvedQuery:
     cleaned = " ".join(query.strip().split())
     if not cleaned:
         return ResolvedQuery("unsupported", None)
+        
     match = re.search(r"\b(?:at|in|near|around)\s+([\w .,'-]+?)(?:\s+(?:in|during|after|from)\b|[?.!,]|$)", cleaned, re.I)
     location = match.group(1).strip(" .,?!") if match else None
-    if not location and len(cleaned.split()) <= 5:
+    if not location and len(cleaned.split()) <= 5 and not any(w in cleaned.lower() for w in ["hello", "hi", "thanks"]):
         location = cleaned
     if location:
         location = LOCATION_ALIASES.get(location.lower(), location)
-    return ResolvedQuery("investigate", location)
+        
+    intent = "investigate"
+    if any(w in cleaned.lower() for w in ["hello", "hi", "hey"]):
+        intent = "smalltalk"
+    elif any(w in cleaned.lower() for w in ["remind", "followup", "again", "what was"]):
+        intent = "followup"
+        
+    return ResolvedQuery(intent, location)

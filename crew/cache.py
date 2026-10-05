@@ -1,19 +1,15 @@
 """Small bounded in-process cache for completed text reports."""
 from __future__ import annotations
-import time
-from threading import Lock
+import os
+from pathlib import Path
+from diskcache import Cache
 
-_items: dict[str, tuple[float, object]] = {}
-_lock = Lock()
+_CACHE_DIR = Path(".cache/crew")
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+_cache = Cache(str(_CACHE_DIR))
 
 def get(key: str, ttl_s: int = 3600):
-    with _lock:
-        value = _items.get(key)
-        if value and time.monotonic() - value[0] < ttl_s:
-            return value[1]
-        _items.pop(key, None)
-        return None
+    return _cache.get(key)
 
-def set(key: str, value: object) -> None:
-    with _lock:
-        _items[key] = (time.monotonic(), value)
+def set(key: str, value: object, ttl_s: int = 3600) -> None:
+    _cache.set(key, value, expire=ttl_s)

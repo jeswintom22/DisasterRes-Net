@@ -27,6 +27,8 @@ def get_damage_analyzer() -> DamageLocalizationAnalyzer:
         return _analyzer
 
 def warm() -> None:
-    """Construct lightweight pipeline objects. Checkpoints retain their own lazy loading."""
-    get_pipeline()
+    """Construct lightweight pipeline objects and force CUDA/cuDNN init."""
+    import numpy as np
+    pipeline = get_pipeline()
     get_damage_analyzer()
+    pipeline.analyze(np.zeros((299, 299, 3), dtype=np.uint8))

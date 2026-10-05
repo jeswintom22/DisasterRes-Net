@@ -69,15 +69,38 @@ def run_disaster_crew(query: str, event_sink: Callable[[dict[str, Any]], None] |
     token = current_run.set(run)
     try:
         resolved = resolve_query(query)
+        if resolved.intent == "smalltalk":
+            return {"response": "Hi! I'm the Disaster Intelligence agent. I can analyze recent disasters using spatial and news imagery. Try asking me about 'Wayanad'.", "run_id": run.run_id}
+            
+        if resolved.intent == "followup":
+            # Very basic follow-up stub
+            _emit(run, event_sink, "resolve", "Handling follow-up query based on prior context.")
+            return {"response": "This is a follow-up response. (Context retrieval not fully implemented yet.)", "run_id": run.run_id}
+
         if not resolved.location:
             raise ValueError("Please include a location, for example: 'Explain the disaster in Wayanad'.")
+            
         _emit(run, event_sink, "resolve", f"Resolving event near {resolved.location}")
         event = resolve_event(resolved.location)
         scout = ScoutResult(resolved.location, event.event_id, event.event_type, event.event_date or "unknown", event.description, sources=[event.source], degraded_sources=[])
-        _emit(run, event_sink, "sources", "Collecting candidate imagery from SerpAPI/GDELT")
+        _emit(run, event_sink, "sources", "Resolving spatial coordinates and tiered image sources")
+        from .resolve.geocode import geocode
+        geo_info = geocode(scout.location)
+        
         gate, downloader = ImageSuitabilityGate(), ImageDownloaderTool()
         assessments, confidences = [], []
-        candidate_urls = GoogleImageScrapeTool().run(scout.location, scout.event_type)
+        
+        candidate_urls = []
+        if geo_info and geo_info.get("bbox"):
+            _emit(run, event_sink, "sources", "Trying Tier 1/3 spatial sources (NASA/Copernicus)...")
+            # STUB: Real NASA/Copernicus fetching using geo_info["bbox"] goes here.
+            # As placeholders, they return nothing yet.
+            pass
+            
+        if not candidate_urls:
+            _emit(run, event_sink, "sources", "Falling back to Tier 5 news sources (GDELT)")
+            candidate_urls = GoogleImageScrapeTool._gdelt_images(scout.location, scout.event_type)
+            
         _emit(run, event_sink, "sources", f"Found {len(candidate_urls)} candidate image URL(s)")
         for url in candidate_urls:
             image = downloader.run(url)

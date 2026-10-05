@@ -12,7 +12,7 @@ def build_agents():
     except ImportError:
         return None
     return [
-        Agent(role="Disaster Intelligence Scout", goal="Find authoritative event context and suitable imagery.", backstory="You are an emergency intelligence officer.", tools=[ReliefWebEventSearchTool(), GoogleImageScrapeTool(), ImageDownloaderTool()], allow_delegation=False),
-        Agent(role="Damage Analyst", goal="Analyse only validated imagery.", backstory="You are a computer vision analyst.", tools=[DisasterResPipelineTool(), DamageAssessmentTool(), MetricAggregatorTool()], allow_delegation=False),
-        Agent(role="Disaster Report Writer", goal="Communicate only supplied facts.", backstory="You write concise emergency situation reports.", tools=[MarkdownFormatterTool()], allow_delegation=False),
+        Agent(role="Disaster Intelligence Scout", goal="Find authoritative event context and suitable imagery.", backstory="You are an emergency intelligence officer.", tools=[ReliefWebEventSearchTool(), GoogleImageScrapeTool(), ImageDownloaderTool()], allow_delegation=False, max_iter=6),
+        Agent(role="Damage Analyst", goal="Analyse only validated imagery.", backstory="You are a computer vision analyst.", tools=[DisasterResPipelineTool(), DamageAssessmentTool(), MetricAggregatorTool()], allow_delegation=False, max_iter=6),
+        Agent(role="Disaster Report Writer", goal="Communicate only supplied facts.", backstory="You write concise emergency situation reports.", tools=[MarkdownFormatterTool()], allow_delegation=False, max_iter=6),
     ]
