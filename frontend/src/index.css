@@ -1,0 +1,99 @@
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..800&family=Instrument+Serif:ital@0;1&family=Spline+Sans+Mono:wght@300..600&display=swap');
+@import "tailwindcss";
+
+/* ── Design tokens: EMBER ON BASALT ──────────────────────────────
+   Disaster-response mission control. Volcanic near-black, bone-paper
+   text, one hot signal colour (ember) and one cold "all-clear" (verdigris). */
+@theme {
+  --font-display: 'Bricolage Grotesque', sans-serif;
+  --font-serif: 'Instrument Serif', serif;
+  --font-mono: 'Spline Sans Mono', monospace;
+
+  --color-basalt: #0c0a09;
+  --color-basalt-2: #14110f;
+  --color-basalt-3: #1d1916;
+  --color-bone: #efe6d3;
+  --color-ash: #8c8272;
+  --color-ember: #ff5a1f;
+  --color-ember-soft: #ff8a4c;
+  --color-verdigris: #4fd1b0;
+}
+
+html, body, #root { min-height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--color-basalt);
+  color: var(--color-bone);
+  font-family: var(--font-display);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: var(--color-ember); color: var(--color-basalt); }
+
+/* Atmosphere: ember bloom + topographic contours + film grain */
+.atmosphere {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background:
+    radial-gradient(900px 520px at 78% -8%, rgba(255, 90, 31, .22), transparent 60%),
+    radial-gradient(700px 480px at -5% 105%, rgba(79, 209, 176, .09), transparent 60%),
+    var(--color-basalt);
+}
+.topo {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: .5;
+  background-image: repeating-radial-gradient(circle at 82% 8%,
+    transparent 0 46px, rgba(239, 230, 211, .045) 46px 47px);
+  mask-image: linear-gradient(to bottom, black, transparent 85%);
+}
+.grain {
+  position: fixed; inset: -50%; pointer-events: none; z-index: 60; opacity: .07;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  animation: grain 1.2s steps(6) infinite;
+}
+@keyframes grain {
+  0% { transform: translate(0, 0); } 20% { transform: translate(-3%, 2%); }
+  40% { transform: translate(2%, -3%); } 60% { transform: translate(-2%, -1%); }
+  80% { transform: translate(3%, 3%); } 100% { transform: translate(0, 0); }
+}
+
+/* Shimmering status text (thinking orbs chat line) */
+.shimmer {
+  background: linear-gradient(100deg, var(--color-ash) 35%, var(--color-bone) 50%, var(--color-ash) 65%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: shimmer 2.2s linear infinite;
+}
+@keyframes shimmer { from { background-position: 150% 0; } to { background-position: -100% 0; } }
+
+/* Staggered load-in */
+@keyframes rise { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise .9s cubic-bezier(.2, .8, .2, 1) both; }
+
+.hairline { box-shadow: 0 0 0 1px rgba(239, 230, 211, .1); }
+.scrollbar-thin::-webkit-scrollbar { width: 6px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(239, 230, 211, .15); border-radius: 9px; }
+
+/* Rendered markdown report */
+.md { font-size: 16.5px; line-height: 1.7; color: var(--color-bone); }
+.md > *:first-child { margin-top: 0; }
+.md h1, .md h2, .md h3 { font-family: var(--font-serif); font-weight: 400; line-height: 1.15; margin: 1.6em 0 .5em; color: var(--color-bone); }
+.md h1 { font-size: 2.1rem; } .md h2 { font-size: 1.7rem; color: var(--color-ember-soft); } .md h3 { font-size: 1.3rem; }
+.md p { margin: .7em 0; color: rgba(239,230,211,.88); }
+.md strong { color: var(--color-bone); font-weight: 650; }
+.md ul, .md ol { margin: .7em 0; padding-left: 1.3em; }
+.md li { margin: .3em 0; } .md li::marker { color: var(--color-ember); }
+.md a { color: var(--color-ember-soft); text-decoration: underline; text-underline-offset: 3px; }
+.md blockquote { margin: 1em 0; padding-left: 1em; border-left: 2px solid rgba(239,230,211,.2); color: var(--color-ash); font-family: var(--font-serif); font-size: 1.15em; }
+.md code { font-family: var(--font-mono); font-size: .85em; background: var(--color-basalt-3); padding: .1em .4em; border-radius: 6px; }
+.md table { width: 100%; border-collapse: collapse; margin: 1.2em 0; font-size: .92em; }
+.md th { text-align: left; font-family: var(--font-mono); font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--color-ash); font-weight: 500; }
+.md th, .md td { padding: .55em .8em; border-bottom: 1px solid rgba(239,230,211,.1); }
+.md tr:hover td { background: rgba(255,90,31,.05); }
+.md hr { border: 0; border-top: 1px solid rgba(239,230,211,.12); margin: 1.8em 0; }
+
+/* Streaming caret + Lenis */
+.caret { display:inline-block; width:.55em; height:1.05em; margin:0 0 -.15em .5em; background:var(--color-ember); border-radius:2px; box-shadow:0 0 12px var(--color-ember); animation: blink .8s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+html.lenis, html.lenis body { height: auto; }
+.lenis.lenis-smooth { scroll-behavior: auto !important; }
+.lenis.lenis-stopped { overflow: hidden; }

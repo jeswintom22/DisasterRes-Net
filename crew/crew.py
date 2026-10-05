@@ -26,7 +26,9 @@ def _load_local_env() -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        os.environ[key] = value
 
 def _openai_narrate(facts: FactsBlock, fallback: str, sink: Callable[[dict[str, Any]], None] | None, run: RunContext) -> tuple[str, str]:
     _load_local_env()
@@ -58,8 +60,18 @@ def _emit(run: RunContext, sink: Callable[[dict[str, Any]], None] | None, stage:
     run.emit(stage, message, **payload)
     if sink: sink({"stage": stage, "message": message, **payload})
 
-def run_disaster_crew(query: str, event_sink: Callable[[dict[str, Any]], None] | None = None, return_payload: bool = False):
+def _to_b64(img, fmt="JPEG"):
+    import cv2, base64
+    if len(img.shape) == 3 and fmt == "JPEG":
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    _, buf = cv2.imencode(f'.{fmt.lower()}', img)
+    return f"data:image/{fmt.lower()};base64," + base64.b64encode(buf).decode('utf-8')
+
+def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Callable[[dict[str, Any]], None] | None = None, return_payload: bool = False):
+    _load_local_env()
     normalized = "v3:" + " ".join(query.lower().split())
+    if image_data:
+        normalized += ":upload"
     cached = cache_get(normalized)
     if cached:
         if event_sink:
@@ -68,59 +80,110 @@ def run_disaster_crew(query: str, event_sink: Callable[[dict[str, Any]], None] |
     run = RunContext(query=query)
     token = current_run.set(run)
     try:
-        resolved = resolve_query(query)
-        if resolved.intent == "smalltalk":
-            return {"response": "Hi! I'm the Disaster Intelligence agent. I can analyze recent disasters using spatial and news imagery. Try asking me about 'Wayanad'.", "run_id": run.run_id}
+        gate = ImageSuitabilityGate()
+        assessments, confidences, accepted_urls = [], [], []
+        if image_data:
+            _emit(run, event_sink, "resolve", "Handling direct image upload.")
+            event_type = query if query and query != "Analyze this imagery" else "Unknown Disaster"
+            scout = ScoutResult("Unknown Location", "upload", event_type, "unknown", "User uploaded image", sources=["Upload"], degraded_sources=[])
             
-        if resolved.intent == "followup":
-            # Very basic follow-up stub
-            _emit(run, event_sink, "resolve", "Handling follow-up query based on prior context.")
-            return {"response": "This is a follow-up response. (Context retrieval not fully implemented yet.)", "run_id": run.run_id}
-
-        if not resolved.location:
-            raise ValueError("Please include a location, for example: 'Explain the disaster in Wayanad'.")
+            import cv2
+            import numpy as np
+            import base64
+            b64 = image_data.split(",")[1] if "," in image_data else image_data
+            nparr = np.frombuffer(base64.b64decode(b64), np.uint8)
+            image_bgr = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
             
-        _emit(run, event_sink, "resolve", f"Resolving event near {resolved.location}")
-        event = resolve_event(resolved.location)
-        scout = ScoutResult(resolved.location, event.event_id, event.event_type, event.event_date or "unknown", event.description, sources=[event.source], degraded_sources=[])
-        _emit(run, event_sink, "sources", "Resolving spatial coordinates and tiered image sources")
-        from .resolve.geocode import geocode
-        geo_info = geocode(scout.location)
-        
-        gate, downloader = ImageSuitabilityGate(), ImageDownloaderTool()
-        assessments, confidences = [], []
-        
-        candidate_urls = []
-        if geo_info and geo_info.get("bbox"):
-            _emit(run, event_sink, "sources", "Trying Tier 1/3 spatial sources (NASA/Copernicus)...")
-            # STUB: Real NASA/Copernicus fetching using geo_info["bbox"] goes here.
-            # As placeholders, they return nothing yet.
-            pass
-            
-        if not candidate_urls:
-            _emit(run, event_sink, "sources", "Falling back to Tier 5 news sources (GDELT)")
-            candidate_urls = GoogleImageScrapeTool._gdelt_images(scout.location, scout.event_type)
-            
-        _emit(run, event_sink, "sources", f"Found {len(candidate_urls)} candidate image URL(s)")
-        for url in candidate_urls:
-            image = downloader.run(url)
-            if image is None:
-                scout.rejected.append({"url": url, "reason": "Image could not be safely downloaded."}); continue
             verdict = gate.evaluate(image)
             if not verdict.accepted:
-                scout.rejected.append({"url": url, "reason": verdict.reason}); continue
-            handle = run.put_image(image); scout.image_handles.append(handle)
-            _emit(run, event_sink, "analysis", f"Analysing evidence image {len(scout.image_handles)}")
-            analysis, assessment = analyze_image(image, scout.event_type)
-            assessments.append(assessment)
-            confidences.append(float((analysis["predictions"].get("damage") or {}).get("confidence", 0.0)))
+                scout.rejected.append({"url": "upload", "reason": verdict.reason})
+                scout.degraded_sources.append("Uploaded image failed suitability check.")
+            else:
+                handle = run.put_image(image)
+                scout.image_handles.append(handle)
+                _emit(run, event_sink, "analysis", "Analysing uploaded evidence image")
+                
+                loc_backend = "provided"
+                q = query.lower()
+                if "gradcam++" in q or "gradcam_plus_plus" in q: loc_backend = "gradcam_plus_plus"
+                elif "gradcam" in q or "grad_cam" in q: loc_backend = "gradcam"
+                elif "scorecam" in q: loc_backend = "scorecam"
+                
+                analysis, assessment = analyze_image(image, event_type, localization_backend=loc_backend)
+                assessments.append(assessment)
+                confidences.append(float((analysis["predictions"].get("damage") or {}).get("confidence", 0.0)))
+                accepted_urls.append("upload")
+                
+                saliency_map = analysis["saliency"].saliency_map
+                smap_scaled = (saliency_map * 255).astype(np.uint8)
+                saliency_heatmap = cv2.applyColorMap(smap_scaled, cv2.COLORMAP_JET)
+                saliency_overlay = cv2.addWeighted(image_bgr, 0.52, saliency_heatmap, 0.48, 0)
+                
+                run.visualizations = {
+                    "saliency map": _to_b64(smap_scaled, "PNG"),
+                    "damage mask": _to_b64(assessment.ddm_overlay),
+                    "gradcam overlay": _to_b64(saliency_overlay)
+                }
+        else:
+            resolved = resolve_query(query)
+            if resolved.intent == "smalltalk":
+                return {"response": "Hi! I'm the Disaster Intelligence agent. I can analyze recent disasters using spatial and news imagery. Try asking me about 'Wayanad'.", "run_id": run.run_id}
+                
+            if resolved.intent == "followup":
+                _emit(run, event_sink, "resolve", "Handling follow-up query based on prior context.")
+                return {"response": "This is a follow-up response. (Context retrieval not fully implemented yet.)", "run_id": run.run_id}
+
+            if not resolved.location:
+                raise ValueError("Please include a location, for example: 'Explain the disaster in Wayanad'.")
+                
+            _emit(run, event_sink, "resolve", f"Resolving event near {resolved.location}")
+            event = resolve_event(resolved.location)
+            scout = ScoutResult(resolved.location, event.event_id, event.event_type, event.event_date or "unknown", event.description, sources=[event.source], degraded_sources=[])
+            _emit(run, event_sink, "sources", "Resolving spatial coordinates and tiered image sources")
+            from .resolve.geocode import geocode
+            geo_info = geocode(scout.location)
+            
+            downloader = ImageDownloaderTool()
+            
+            candidate_urls = []
+            if geo_info and geo_info.get("bbox"):
+                _emit(run, event_sink, "sources", "Trying Tier 1/3 spatial sources (NASA/Copernicus)...")
+                pass
+                
+            if not candidate_urls:
+                _emit(run, event_sink, "sources", "Querying Serper.dev API for latest aerial imagery...")
+                candidate_urls = GoogleImageScrapeTool().run(scout.location, scout.event_type)
+                
+            _emit(run, event_sink, "sources", f"Found {len(candidate_urls)} candidate image URL(s)")
+            for url in candidate_urls:
+                image = downloader.run(url)
+                if image is None:
+                    scout.rejected.append({"url": url, "reason": "Image could not be safely downloaded."}); continue
+                verdict = gate.evaluate(image)
+                if not verdict.accepted:
+                    scout.rejected.append({"url": url, "reason": verdict.reason}); continue
+                handle = run.put_image(image); scout.image_handles.append(handle)
+                accepted_urls.append(url)
+                _emit(run, event_sink, "analysis", f"Analysing evidence image {len(scout.image_handles)}")
+                analysis, assessment = analyze_image(image, scout.event_type)
+                assessments.append(assessment)
+                confidences.append(float((analysis["predictions"].get("damage") or {}).get("confidence", 0.0)))
+
         if not scout.image_handles:
             scout.degraded_sources.append("No source returned a suitable image; generated a text-only event briefing.")
         analysis_result = aggregate_assessments(scout.location, scout.event_type, assessments, confidences, len(scout.rejected))
         facts = FactsBlock(run.run_id, scout, analysis_result)
         deterministic_response = render_report(facts)
         response, narration_mode = _openai_narrate(facts, deterministic_response, event_sink, run)
-        payload = {"response": response, "query": query, "run_id": run.run_id, "narration": narration_mode, "facts": {"images_analysed": analysis_result.images_analysed, "images_rejected": analysis_result.images_rejected, "confidence_band": analysis_result.confidence_band}, "events": run.events}
+        
+        if accepted_urls and not image_data:
+            images_md = "\n\n### Analysed Satellite Imagery\n" + "\n".join(
+                f"![Damage Assessment Image]({url})" for url in accepted_urls if url != "upload"
+            )
+            response += images_md
+
+        payload = {"response": response, "query": query, "run_id": run.run_id, "narration": narration_mode, "facts": {"images_analysed": analysis_result.images_analysed, "images_rejected": analysis_result.images_rejected, "confidence_band": analysis_result.confidence_band, "visualizations": getattr(run, "visualizations", None)}, "events": run.events}
         cache_set(normalized, payload)
         write_trace(run, "complete")
         return payload if return_payload else response

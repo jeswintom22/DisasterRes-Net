@@ -16,18 +16,19 @@ class ChatJob:
     id: str
     query: str
     queue: Queue = field(default_factory=Queue)
+    image_data: str | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
     future: Future | None = None
     created: float = field(default_factory=time.monotonic)
     def emit(self, event: dict[str, Any]) -> None: self.queue.put(event)
 
-def start_job(query: str) -> ChatJob:
+def start_job(query: str, image_data: str | None = None) -> ChatJob:
     from .crew import run_disaster_crew
-    job = ChatJob("", query)
+    job = ChatJob("", query, image_data=image_data)
     def work():
         try:
-            payload = run_disaster_crew(query, event_sink=job.emit, return_payload=True)
+            payload = run_disaster_crew(query, image_data=job.image_data, event_sink=job.emit, return_payload=True)
             job.result = payload; job.emit({"stage": "complete", "message": "Report ready", "result": payload})
         except Exception as exc:  # endpoint returns the controlled error through SSE
             job.error = str(exc); job.emit({"stage": "error", "message": job.error})

@@ -7,6 +7,7 @@ import re
 LOCATION_ALIASES = {
     "wayand": "Wayanad, Kerala, India",
     "wayanad": "Wayanad, Kerala, India",
+    "wayanadu": "Wayanad, Kerala, India",
 }
 
 @dataclass(frozen=True)

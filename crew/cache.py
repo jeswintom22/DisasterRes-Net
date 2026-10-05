@@ -9,7 +9,7 @@ _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _cache = Cache(str(_CACHE_DIR))
 
 def get(key: str, ttl_s: int = 3600):
-    return _cache.get(key)
+    return None
 
 def set(key: str, value: object, ttl_s: int = 3600) -> None:
-    _cache.set(key, value, expire=ttl_s)
+    pass

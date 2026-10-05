@@ -3,7 +3,7 @@ from .facts import FactsBlock
 
 def render_report(facts: FactsBlock) -> str:
     scout, analysis = facts.scout, facts.analysis
-    sources = ", ".join(source.name for source in scout.sources if source.name) or "No external source"
+    sources = ", ".join(getattr(source, 'name', str(source)) for source in scout.sources if source) or "No external source"
     lines = [
         f"## Disaster Situation Report — {scout.location}",
         "",
