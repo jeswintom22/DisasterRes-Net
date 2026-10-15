@@ -16,8 +16,14 @@ class GoogleImageScrapeTool:
             all_urls.extend(self._google_custom_search_images(q, gcs_key, gcs_cx))
 
         # 2. DataForSEO
+        dfs_login = os.getenv("DATAFORSEO_LOGIN")
+        dfs_password = os.getenv("DATAFORSEO_PASSWORD")
         dfs_key = os.getenv("DATAFORSEO_API_KEY")
-        if dfs_key:
+        if dfs_login and dfs_password:
+            import base64
+            auth_token = base64.b64encode(f"{dfs_login}:{dfs_password}".encode()).decode("utf-8")
+            all_urls.extend(self._dataforseo_images(q, auth_token))
+        elif dfs_key:
             all_urls.extend(self._dataforseo_images(q, dfs_key))
 
         # 3. Serper.dev
