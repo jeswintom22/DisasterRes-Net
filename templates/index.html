@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 
 <head>
@@ -218,8 +218,11 @@
             formData.append('localization_backend', backendSelect.value);
             try {
                 const response = await fetch('/api/predict', { method: 'POST', body: formData });
-                const data = await response.json();
-                if (!response.ok) throw new Error(data.error || 'Prediction failed');
+                let data = null;
+                try {
+                    data = await response.json();
+                } catch (_) {}
+                if (!response.ok) throw new Error((data && data.error) || (response.status === 413 ? 'Image is too large. Please upload an image under 32MB.' : 'Prediction failed (' + response.status + ')'));
                 latestResult = data;
                 renderDashboard(data);
             } catch (error) {

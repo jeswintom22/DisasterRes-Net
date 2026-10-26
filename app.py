@@ -11,10 +11,20 @@ from models.hybrid_pipeline import HybridDisasterPipeline
 from utils.image_io import heatmap_overlay, image_to_data_url, resize_rgb_to_max_edge
 
 app = Flask(__name__)
-MAX_UPLOAD_BYTES = int(os.getenv('DISASTERRES_MAX_UPLOAD_BYTES', str(12 * 1024 * 1024)))
+MAX_UPLOAD_BYTES = int(os.getenv('DISASTERRES_MAX_UPLOAD_BYTES', str(32 * 1024 * 1024)))
 MAX_ANALYSIS_EDGE = int(os.getenv('DISASTERRES_MAX_ANALYSIS_EDGE', '1280'))
 MAX_RESPONSE_EDGE = int(os.getenv('DISASTERRES_MAX_RESPONSE_EDGE', '960'))
 app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_BYTES
+
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    return jsonify({"error": f"Uploaded file is too large. Maximum size is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB."}), 413
+
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    return jsonify({"error": "Internal server error during analysis."}), 500
 
 _pipeline: HybridDisasterPipeline | None = None
 _damage_analyzer = DamageLocalizationAnalyzer()

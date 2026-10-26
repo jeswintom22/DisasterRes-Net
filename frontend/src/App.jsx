@@ -176,8 +176,11 @@ export default function App() {
       const res = await fetch('/api/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Could not start chat');
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (_) {}
+      if (!res.ok) throw new Error((data && data.error) || (res.status === 413 ? 'Image is too large. Please upload an image under 32MB.' : 'Could not start chat (' + res.status + ')'));
       const source = new EventSource('/api/chat/stream/' + data.job_id);
       eventSourceRef.current = source;
       source.onmessage = (e) => {

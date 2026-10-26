@@ -156,7 +156,10 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
                 candidate_urls = GoogleImageScrapeTool().run(scout.location, scout.event_type)
                 
             _emit(run, event_sink, "sources", f"Found {len(candidate_urls)} candidate image URL(s)")
+            max_evidence = int(os.getenv("DISASTERRES_MAX_EVIDENCE_IMAGES", "5"))
             for url in candidate_urls:
+                if len(scout.image_handles) >= max_evidence:
+                    break
                 image = downloader.run(url)
                 if image is None:
                     scout.rejected.append({"url": url, "reason": "Image could not be safely downloaded."}); continue

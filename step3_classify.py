@@ -67,6 +67,22 @@ try:
     import torch.nn as nn
     from torch.utils.data import DataLoader, Dataset
     import torchvision.transforms as transforms
+    try:
+        import huggingface_hub
+        if not hasattr(huggingface_hub, "repo_type_and_id_from_hf_id"):
+            def _repo_type_and_id_from_hf_id(repo_id: str):
+                if hasattr(huggingface_hub, "utils") and hasattr(huggingface_hub.utils, "parse_hf_uri"):
+                    parsed = huggingface_hub.utils.parse_hf_uri(repo_id)
+                    rtype = parsed.type or "model"
+                    fid = parsed.id or repo_id
+                else:
+                    rtype = "model"
+                    fid = repo_id
+                parts = fid.strip("/").split("/")
+                return (rtype, parts[0], "/".join(parts[1:])) if len(parts) >= 2 else (rtype, None, parts[0] if parts else "")
+            huggingface_hub.repo_type_and_id_from_hf_id = _repo_type_and_id_from_hf_id
+    except Exception:
+        pass
     import timm
 except Exception as exc:
     torch = None

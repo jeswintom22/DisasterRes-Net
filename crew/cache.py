@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 from diskcache import Cache
 
-_CACHE_DIR = Path(".cache/crew")
+_ROOT = Path(__file__).resolve().parent.parent
+_CACHE_DIR = _ROOT / ".cache" / "crew"
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 _cache = Cache(str(_CACHE_DIR))
 
