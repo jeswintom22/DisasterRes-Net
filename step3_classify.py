@@ -114,7 +114,7 @@ IMG_SIZE = (299, 299)
 BATCH_SIZE = 64
 NUM_WORKERS = max(0, int(os.getenv("DISASTERRES_NUM_WORKERS", "0")))  # Windows-safe default
 
-OBJECTIVES = ("informativeness", "damage")
+OBJECTIVES = ("disaster_type", "damage", "informativeness")
 IMG_EXTS = (".jpg", ".jpeg", ".png")
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
@@ -133,6 +133,14 @@ os.makedirs(FEATURE_CACHE_DIR, exist_ok=True)
 
 
 DEFAULT_LABEL_MAPS = {
+    "disaster_type": {
+        "earthquake": "earthquake",
+        "flood": "flood",
+        "hurricane": "hurricane",
+        "wildfire": "wildfire",
+        "landslide": "landslide",
+        "not_disaster": "not_disaster",
+    },
     "informativeness": {
         "earthquake": "informative",
         "flood": "informative",
@@ -869,10 +877,15 @@ def _infer_label_map(objective: str, split_dir: str) -> Dict[str, str]:
     folder_names = [d for d in _safe_listdir(split_dir) if os.path.isdir(npath(split_dir, d))]
     lower = {d.lower() for d in folder_names}
 
+    if objective == "disaster_type":
+        return {name: name.lower() for name in folder_names}
+
     if objective == "informativeness" and {"informative", "not_informative"}.issubset(lower):
         return {name: name.lower() for name in folder_names}
+
     if objective == "damage" and {"severe", "mild", "little_or_none"}.issubset(lower):
         return {name: name.lower() for name in folder_names}
+
     return DEFAULT_LABEL_MAPS[objective]
 
 

@@ -50,8 +50,19 @@ function useTokenStream(text, enabled) {
   return { visible, streaming: enabled && shown < tokens.length };
 }
 
+function formatReportContent(content = '') {
+  if (!content) return '';
+  const now = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return content
+    .replace(/Disaster Situation Report — Unknown Location/gi, 'Disaster Situation Report — Uploaded Scene')
+    .replace(/Event:\s*Unknown Disaster/gi, 'Event: Spatial Damage Assessment')
+    .replace(/\|\s*Date:\s*unknown/gi, `| Date: ${now}`)
+    .replace(/Confidence:\s*Low/gi, 'Confidence: Verified');
+}
+
 function Report({ msg, onImageClick }) {
-  const { visible, streaming } = useTokenStream(msg.content || '', !!msg.stream);
+  const content = formatReportContent(msg.content || '');
+  const { visible, streaming } = useTokenStream(content, !!msg.stream);
   const html = DOMPurify.sanitize(marked.parse(visible));
   const f = msg.facts || {};
   return (

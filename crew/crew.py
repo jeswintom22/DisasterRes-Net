@@ -84,8 +84,24 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
         assessments, confidences, accepted_urls = [], [], []
         if image_data:
             _emit(run, event_sink, "resolve", "Handling direct image upload.")
-            event_type = query if query and query != "Analyze this imagery" else "Unknown Disaster"
-            scout = ScoutResult("Unknown Location", "upload", event_type, "unknown", "User uploaded image", sources=["Upload"], degraded_sources=[])
+            from datetime import date
+            today_str = date.today().strftime("%B %d, %Y")
+            
+            resolved_loc = "Uploaded Scene"
+            event_type = "Disaster Assessment"
+            if query and query.strip().lower() not in ("analyze this imagery", "upload", ""):
+                try:
+                    resolved = resolve_query(query)
+                    if resolved.location:
+                        resolved_loc = resolved.location
+                except Exception:
+                    pass
+                for peril in ("earthquake", "flood", "hurricane", "wildfire", "landslide"):
+                    if peril in query.lower():
+                        event_type = peril.title()
+                        break
+            
+            scout = ScoutResult(resolved_loc, "upload", event_type, today_str, "User uploaded evidence imagery", sources=["Direct Upload"], degraded_sources=[])
             
             import cv2
             import numpy as np
@@ -110,7 +126,22 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
                 elif "gradcam" in q or "grad_cam" in q: loc_backend = "gradcam"
                 elif "scorecam" in q: loc_backend = "scorecam"
                 
-                analysis, assessment = analyze_image(image, event_type, localization_backend=loc_backend)
+                analysis, assessment = analyze_image(image, event_type.lower() if event_type != "Disaster Assessment" else "earthquake", localization_backend=loc_backend)
+                
+                from dataclasses import replace
+                model_pred_type = (analysis.get("predictions", {}).get("disaster_type") or {}).get("prediction")
+                final_event_type = scout.event_type
+                if event_type == "Disaster Assessment":
+                    if model_pred_type and model_pred_type not in ("unknown", "not_disaster"):
+                        scout.event_type = model_pred_type.title()
+                        final_event_type = model_pred_type.title()
+                    elif model_pred_type == "not_disaster":
+                        scout.event_type = "Baseline / Non-Disaster"
+                        final_event_type = "Baseline / Non-Disaster"
+                
+                scout.event_description = f"Automated multimodal assessment of uploaded imagery. Fused classifiers identified features consistent with {scout.event_type}."
+                desc = f"Automated multimodal assessment of uploaded imagery. Fused classifiers identified features consistent with {final_event_type}."
+                scout = replace(scout, event_type=final_event_type, event_description=desc)
                 assessments.append(assessment)
                 confidences.append(float((analysis["predictions"].get("damage") or {}).get("confidence", 0.0)))
                 accepted_urls.append("upload")

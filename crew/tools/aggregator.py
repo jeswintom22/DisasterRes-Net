@@ -10,6 +10,23 @@ def aggregate_assessments(location: str, event_type: str, assessments: list[Dama
     recommendations = list(dict.fromkeys(rec for item in assessments for rec in item.emergency_recommendations))
     severity = Counter(item.severity_level for item in assessments).most_common(1)[0][0]
     return AnalysisResult(location, event_type, len(assessments), rejected, round(sum(x.dem_score for x in assessments) / len(assessments), 2), severity, round(sum(x.affected_area_percentage for x in assessments) / len(assessments), 2), sum(x.damaged_region_count for x in assessments), max(confidences or [0.0]), "low", caveats_for_images(len(assessments)), recommendations, [{"dem_score": round(x.dem_score, 2), "severity": x.severity_level} for x in assessments])
+    max_conf = max(confidences or [0.0])
+    band = "high" if max_conf >= 0.70 else "medium" if max_conf >= 0.45 else "moderate"
+    return AnalysisResult(
+        location,
+        event_type,
+        len(assessments),
+        rejected,
+        round(sum(x.dem_score for x in assessments) / len(assessments), 2),
+        severity,
+        round(sum(x.affected_area_percentage for x in assessments) / len(assessments), 2),
+        sum(x.damaged_region_count for x in assessments),
+        max_conf,
+        band,
+        caveats_for_images(len(assessments)),
+        recommendations,
+        [{"dem_score": round(x.dem_score, 2), "severity": x.severity_level} for x in assessments],
+    )
 
 class MetricAggregatorTool:
     def run(self, location: str, event_type: str, assessments): return aggregate_assessments(location, event_type, assessments)

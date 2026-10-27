@@ -44,6 +44,17 @@
                     <option value="scorecam">Score-CAM</option>
                 </select>
             </label>
+            <label class="backend-select">
+                <span>Disaster Type</span>
+                <select id="disasterSelect">
+                    <option value="">Auto-Detect from Image</option>
+                    <option value="wildfire">Wildfire</option>
+                    <option value="flood">Flood</option>
+                    <option value="earthquake">Earthquake</option>
+                    <option value="hurricane">Hurricane / Storm</option>
+                    <option value="landslide">Landslide</option>
+                </select>
+            </label>
             <div class="loading" id="loader">
                 <span></span>
                 <span></span>
@@ -216,6 +227,8 @@
             const formData = new FormData();
             formData.append('file', selectedFile);
             formData.append('localization_backend', backendSelect.value);
+            const disasterVal = document.getElementById('disasterSelect')?.value;
+            if (disasterVal) formData.append('disaster_type', disasterVal);
             try {
                 const response = await fetch('/api/predict', { method: 'POST', body: formData });
                 let data = null;
@@ -244,13 +257,18 @@
         });
 
         function renderDashboard(data) {
-            const pred = data.informativeness || data.disaster_type;
+            const pred = (data.disaster_type && data.disaster_type.prediction !== 'unknown') ? data.disaster_type : (data.informativeness || data.disaster_type);
             const damagePred = data.damage || {};
             const damage = data.damage_assessment;
             const context = data.disaster_context || { label: 'unknown' };
             uploadPanel.hidden = true;
             dashboard.hidden = false;
-            document.getElementById('mainPrediction').textContent = titleCase(context.label);
+            const eventLabel = context.label && context.label !== 'unknown'
+                ? titleCase(context.label) + ' Assessment'
+                : (damagePred.prediction && damagePred.prediction !== 'unknown'
+                    ? titleCase(damagePred.prediction) + ' Damage Assessment'
+                    : 'Disaster Assessment');
+            document.getElementById('mainPrediction').textContent = eventLabel;
             document.getElementById('disasterDescription').textContent = data.disaster_description;
             document.getElementById('confidenceMetric').textContent = titleCase(damagePred.prediction || 'unknown');
             document.getElementById('confidenceBar').style.width = `${damagePred.confidence || 0}%`;
