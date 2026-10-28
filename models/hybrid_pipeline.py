@@ -1,18 +1,19 @@
-﻿"""Research-grade hybrid inference orchestration.
+"""Research-grade hybrid inference orchestration.
 
 This module preserves the saved RandomForest checkpoints while making the
 active inference path explicit:
 
 RGB image -> saliency attention -> CNN features
 RGB image -> LBP texture descriptors
-CNN + handcrafted features -> standardized fusion -> classifier head
+CNN + handcrafted features -> standardized fusion -> classifier head -> calibration & OOD guard
 """
 
 from __future__ import annotations
 
+import os
 import time
-from dataclasses import dataclass
-from typing import Dict
+from dataclasses import dataclass, field
+from typing import Dict, List
 
 import numpy as np
 
@@ -22,6 +23,7 @@ from preprocessing.saliency import SaliencyAttention, saliency_to_rgb
 from step3_classify import (
     FEATURE_PIPELINE,
     OBJECTIVES,
+    _load_calibrated_bundle,
     _load_rf_bundle,
     _load_shared_feature_models,
     extract_features_predictions_from_arrays,
@@ -39,10 +41,15 @@ class ObjectivePrediction:
     probabilities: Dict[str, float]
     feature_dim: int
     fusion: Dict[str, object]
+    effective_prediction: str = ""
+    uncertain: bool = False
+    top2: List[Dict[str, object]] = field(default_factory=list)
+    calibrated_probabilities: Dict[str, float] = field(default_factory=dict)
+    ood_flag: bool = False
 
 
 class HybridDisasterPipeline:
-    """Run saliency-attended CNN + LBP fusion inference."""
+    """Run saliency-attended CNN + LBP fusion inference with probability calibration."""
 
     def __init__(self) -> None:
         self.saliency = SaliencyAttention()
@@ -62,6 +69,7 @@ class HybridDisasterPipeline:
         )
 
         elapsed_ms = (time.perf_counter() - started) * 1000.0
+        backend_mode = os.getenv("DISASTERRES_MODEL_BACKEND", "calibrated_rf").strip().lower()
         return {
             "predictions": {key: value.__dict__ for key, value in predictions.items()},
             "saliency": saliency_output,
@@ -69,11 +77,12 @@ class HybridDisasterPipeline:
             "processing_time_ms": elapsed_ms,
             "model_info": {
                 "backbone": "InceptionResNetV2 via timm",
-                "classifier": "StandardScaler + RandomForest",
+                "classifier": "StandardScaler + Regularized RandomForest + OOF Calibration",
+                "model_backend": backend_mode,
                 "feature_pipeline": FEATURE_PIPELINE,
                 "saliency_attention": saliency_output.method,
-                "lbp_stream": "uniform LBP histogram used in fused classifier input",
-                "checkpoint_compatibility": "Uses existing RF/scaler/encoder artifacts when present.",
+                "lbp_stream": "uniform LBP histogram + texture statistics used in fused classifier input",
+                "checkpoint_compatibility": "Uses calibrated bundle + RF/scaler/encoder artifacts when present.",
             },
         }
 
@@ -105,6 +114,9 @@ class HybridDisasterPipeline:
             "lbp_stats": np.asarray([lbp_feature_vector], dtype=np.float32),
         }
 
+        backend_mode = os.getenv("DISASTERRES_MODEL_BACKEND", "calibrated_rf").strip().lower()
+        operating_point = os.getenv("DISASTERRES_OPERATING_POINT", "default").strip()
+
         for objective in OBJECTIVES:
             clf, le, scaler, feature_spec = _load_rf_bundle(objective)
             fused, metadata = fuse_feature_streams(available_features, feature_spec)
@@ -114,10 +126,35 @@ class HybridDisasterPipeline:
             pred_label = str(le.inverse_transform([pred_idx])[0])
             confidence = 0.0
             probabilities: Dict[str, float] = {}
+            effective_pred = pred_label
+            uncertain = False
+            top2: List[Dict[str, object]] = []
+            ood_flag = False
+
             if hasattr(clf, "predict_proba"):
                 probs = clf.predict_proba(fused_scaled)[0]
-                confidence = float(np.max(probs))
-                probabilities = {str(cls): float(prob) for cls, prob in zip(le.classes_, probs)}
+                cal_bundle = _load_calibrated_bundle(objective, feature_spec.name)
+                if cal_bundle is not None and backend_mode != "legacy_rf":
+                    cal_out = cal_bundle.evaluate_probabilities(
+                        probs,
+                        cnn_embedding=df1[0],
+                        operating_mode=operating_point,
+                    )
+                    pred_label = str(cal_out["prediction"])
+                    effective_pred = str(cal_out["effective_prediction"])
+                    uncertain = bool(cal_out["uncertain"])
+                    confidence = float(cal_out["confidence"])
+                    probabilities = {str(k): float(v) for k, v in cal_out["probabilities"].items()}
+                    top2 = list(cal_out["top2"])
+                    ood_flag = bool(cal_out["ood_flag"])
+                else:
+                    confidence = float(np.max(probs))
+                    probabilities = {str(cls): float(prob) for cls, prob in zip(le.classes_, probs)}
+                    order = np.argsort(probs)[::-1]
+                    top2 = [
+                        {"label": str(le.classes_[order[0]]), "confidence": round(float(probs[order[0]]) * 100.0, 2)},
+                        {"label": str(le.classes_[order[1]]), "confidence": round(float(probs[order[1]]) * 100.0, 2)},
+                    ]
 
             predictions[objective] = ObjectivePrediction(
                 objective=objective,
@@ -126,10 +163,10 @@ class HybridDisasterPipeline:
                 probabilities=probabilities,
                 feature_dim=int(fused.shape[1]),
                 fusion={**metadata.as_dict(), "artifact_pipeline": feature_spec.name},
+                effective_prediction=effective_pred,
+                uncertain=uncertain,
+                top2=top2,
+                calibrated_probabilities=probabilities,
+                ood_flag=ood_flag,
             )
         return predictions
-
-
-
-
-

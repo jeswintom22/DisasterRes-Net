@@ -81,11 +81,27 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
     token = current_run.set(run)
     try:
         gate = ImageSuitabilityGate()
-        assessments, confidences, accepted_urls = [], [], []
+        assessments, confidences, accepted_urls, extra_caveats = [], [], [], []
         if image_data:
             _emit(run, event_sink, "resolve", "Handling direct image upload.")
-            event_type = query if query and query != "Analyze this imagery" else "Unknown Disaster"
-            scout = ScoutResult("Unknown Location", "upload", event_type, "unknown", "User uploaded image", sources=["Upload"], degraded_sources=[])
+            from datetime import date
+            today_str = date.today().strftime("%B %d, %Y")
+            
+            resolved_loc = "Uploaded Scene"
+            event_type = "Disaster Assessment"
+            if query and query.strip().lower() not in ("analyze this imagery", "upload", ""):
+                try:
+                    resolved = resolve_query(query)
+                    if resolved.location:
+                        resolved_loc = resolved.location
+                except Exception:
+                    pass
+                for peril in ("earthquake", "flood", "hurricane", "wildfire", "landslide"):
+                    if peril in query.lower():
+                        event_type = peril.title()
+                        break
+            
+            scout = ScoutResult(resolved_loc, "upload", event_type, today_str, "User uploaded evidence imagery", sources=["Direct Upload"], degraded_sources=[])
             
             import cv2
             import numpy as np
@@ -110,7 +126,33 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
                 elif "gradcam" in q or "grad_cam" in q: loc_backend = "gradcam"
                 elif "scorecam" in q: loc_backend = "scorecam"
                 
-                analysis, assessment = analyze_image(image, event_type, localization_backend=loc_backend)
+                analysis, assessment = analyze_image(image, event_type.lower() if event_type != "Disaster Assessment" else "earthquake", localization_backend=loc_backend)
+                
+                from dataclasses import replace
+                dis_pred_obj = analysis.get("predictions", {}).get("disaster_type") or {}
+                model_pred_type = dis_pred_obj.get("prediction")
+                if dis_pred_obj.get("uncertain"):
+                    top2_list = dis_pred_obj.get("top2") or []
+                    if len(top2_list) >= 2:
+                        c1 = f"{top2_list[0]['label']} ({top2_list[0]['confidence']}%)"
+                        c2 = f"{top2_list[1]['label']} ({top2_list[1]['confidence']}%)"
+                        extra_caveats.append(f"Peril classifier flagged close boundary uncertainty between {c1} and {c2}; verify scene context.")
+                    else:
+                        extra_caveats.append("Peril classifier flagged low calibrated confidence on this image.")
+                if dis_pred_obj.get("ood_flag"):
+                    extra_caveats.append("Out-of-distribution visual embedding detected (Mahalanobis guard); treat automated classification with caution.")
+                final_event_type = scout.event_type
+                if event_type == "Disaster Assessment":
+                    if model_pred_type and model_pred_type not in ("unknown", "not_disaster"):
+                        scout.event_type = model_pred_type.title()
+                        final_event_type = model_pred_type.title()
+                    elif model_pred_type == "not_disaster":
+                        scout.event_type = "Baseline / Non-Disaster"
+                        final_event_type = "Baseline / Non-Disaster"
+                
+                scout.event_description = f"Automated multimodal assessment of uploaded imagery. Fused classifiers identified features consistent with {scout.event_type}."
+                desc = f"Automated multimodal assessment of uploaded imagery. Fused classifiers identified features consistent with {final_event_type}."
+                scout = replace(scout, event_type=final_event_type, event_description=desc)
                 assessments.append(assessment)
                 confidences.append(float((analysis["predictions"].get("damage") or {}).get("confidence", 0.0)))
                 accepted_urls.append("upload")
@@ -156,7 +198,10 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
                 candidate_urls = GoogleImageScrapeTool().run(scout.location, scout.event_type)
                 
             _emit(run, event_sink, "sources", f"Found {len(candidate_urls)} candidate image URL(s)")
+            max_evidence = int(os.getenv("DISASTERRES_MAX_EVIDENCE_IMAGES", "5"))
             for url in candidate_urls:
+                if len(scout.image_handles) >= max_evidence:
+                    break
                 image = downloader.run(url)
                 if image is None:
                     scout.rejected.append({"url": url, "reason": "Image could not be safely downloaded."}); continue
@@ -172,7 +217,14 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
 
         if not scout.image_handles:
             scout.degraded_sources.append("No source returned a suitable image; generated a text-only event briefing.")
-        analysis_result = aggregate_assessments(scout.location, scout.event_type, assessments, confidences, len(scout.rejected))
+        analysis_result = aggregate_assessments(
+            scout.location,
+            scout.event_type,
+            assessments,
+            confidences,
+            len(scout.rejected),
+            extra_caveats=extra_caveats,
+        )
         facts = FactsBlock(run.run_id, scout, analysis_result)
         deterministic_response = render_report(facts)
         response, narration_mode = _openai_narrate(facts, deterministic_response, event_sink, run)

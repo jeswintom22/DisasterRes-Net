@@ -1,6 +1,7 @@
 """One inference stack per process; serialise GPU/model calls on Windows."""
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 
@@ -10,7 +11,16 @@ from models.hybrid_pipeline import HybridDisasterPipeline
 _pipeline: HybridDisasterPipeline | None = None
 _analyzer: DamageLocalizationAnalyzer | None = None
 _lock = Lock()
-INFERENCE_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="disaster-inference")
+INFERENCE_POOL = ThreadPoolExecutor(
+    max_workers=max(1, min(2, int(os.getenv("DISASTERRES_INFERENCE_WORKERS", "2")))),
+    thread_name_prefix="disaster-inference",
+)
+
+
+def get_model_backend() -> str:
+    """Return active model backend ('calibrated_rf', 'legacy_rf', or 'multitask_torch')."""
+    return os.getenv("DISASTERRES_MODEL_BACKEND", "calibrated_rf").strip().lower()
+
 
 def get_pipeline() -> HybridDisasterPipeline:
     global _pipeline
@@ -19,6 +29,7 @@ def get_pipeline() -> HybridDisasterPipeline:
             _pipeline = HybridDisasterPipeline()
         return _pipeline
 
+
 def get_damage_analyzer() -> DamageLocalizationAnalyzer:
     global _analyzer
     with _lock:
@@ -26,9 +37,11 @@ def get_damage_analyzer() -> DamageLocalizationAnalyzer:
             _analyzer = DamageLocalizationAnalyzer()
         return _analyzer
 
+
 def warm() -> None:
     """Construct lightweight pipeline objects and force CUDA/cuDNN init."""
     import numpy as np
+
     pipeline = get_pipeline()
     get_damage_analyzer()
     pipeline.analyze(np.zeros((299, 299, 3), dtype=np.uint8))

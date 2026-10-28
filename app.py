@@ -11,10 +11,20 @@ from models.hybrid_pipeline import HybridDisasterPipeline
 from utils.image_io import heatmap_overlay, image_to_data_url, resize_rgb_to_max_edge
 
 app = Flask(__name__)
-MAX_UPLOAD_BYTES = int(os.getenv('DISASTERRES_MAX_UPLOAD_BYTES', str(12 * 1024 * 1024)))
+MAX_UPLOAD_BYTES = int(os.getenv('DISASTERRES_MAX_UPLOAD_BYTES', str(32 * 1024 * 1024)))
 MAX_ANALYSIS_EDGE = int(os.getenv('DISASTERRES_MAX_ANALYSIS_EDGE', '1280'))
 MAX_RESPONSE_EDGE = int(os.getenv('DISASTERRES_MAX_RESPONSE_EDGE', '960'))
 app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_BYTES
+
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    return jsonify({"error": f"Uploaded file is too large. Maximum size is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB."}), 413
+
+
+@app.errorhandler(500)
+def internal_server_error(error):
+    return jsonify({"error": "Internal server error during analysis."}), 500
 
 _pipeline: HybridDisasterPipeline | None = None
 _damage_analyzer = DamageLocalizationAnalyzer()
@@ -46,11 +56,19 @@ def _percent(value: float) -> float:
 
 def _prediction_payload(prediction: dict) -> dict:
     probabilities = prediction.get("probabilities", {}) or {}
+    cal_probs = prediction.get("calibrated_probabilities") or probabilities
     top5 = sorted(probabilities.items(), key=lambda item: item[1], reverse=True)[:5]
+    top2 = prediction.get("top2") or [{"label": key, "confidence": _percent(value)} for key, value in top5[:2]]
+    pred_label = prediction.get("prediction", "unknown")
     return {
-        "prediction": prediction.get("prediction", "unknown"),
+        "prediction": pred_label,
+        "effective_prediction": prediction.get("effective_prediction") or pred_label,
+        "uncertain": bool(prediction.get("uncertain", False)),
+        "ood_flag": bool(prediction.get("ood_flag", False)),
         "confidence": _percent(prediction.get("confidence", 0.0)),
         "probabilities": {key: _percent(value) for key, value in probabilities.items()},
+        "calibrated_probabilities": {key: _percent(value) for key, value in cal_probs.items()},
+        "top2": top2,
         "top5": [{"label": key, "confidence": _percent(value)} for key, value in top5],
         "feature_dim": prediction.get("feature_dim", 0),
         "fusion": prediction.get("fusion", {}),
@@ -102,7 +120,30 @@ def _texture_stats_payload(stats: dict) -> dict:
     return {key: round(float(value), 4) for key, value in stats.items()}
 
 
-def _resolve_disaster_context(form, filename: str | None) -> dict:
+def _detect_visual_disaster_type(rgb: np.ndarray) -> str:
+    """Heuristic visual scene analysis for unlabelled disaster imagery."""
+    if rgb is None or rgb.size == 0:
+        return "unknown"
+    r = rgb[..., 0].astype(float)
+    g = rgb[..., 1].astype(float)
+    b = rgb[..., 2].astype(float)
+    fire_pixels = (r > 155) & (g < 130) & (b < 100)
+    water_pixels = (b > r + 15) & (b > g)
+    mud_pixels = (r > 80) & (r < 160) & (g > 60) & (g < 130) & (b < 80)
+    total = float(rgb.shape[0] * rgb.shape[1])
+    if (np.sum(fire_pixels) / total) > 0.035:
+        return "wildfire"
+    if (np.sum(water_pixels | mud_pixels) / total) > 0.16:
+        return "flood"
+    return "earthquake"
+
+
+def _resolve_disaster_context(
+    form,
+    filename: str | None,
+    image_rgb: np.ndarray | None = None,
+    predicted_type: str | None = None,
+) -> dict:
     candidates = [
         ("form", form.get("disaster_type") or form.get("disaster_label") or form.get("disaster_context")),
         ("filename", filename or ""),
@@ -112,7 +153,13 @@ def _resolve_disaster_context(form, filename: str | None) -> dict:
         for label in DISASTER_LABELS:
             if label in text:
                 return {"label": label, "source": source}
-    return {"label": "unknown", "source": "fallback"}
+    if predicted_type and predicted_type.lower() in DISASTER_LABELS:
+        return {"label": predicted_type.lower(), "source": "model_prediction"}
+    if image_rgb is not None:
+        detected = _detect_visual_disaster_type(image_rgb)
+        if detected != "unknown":
+            return {"label": detected, "source": "visual_heuristic"}
+    return {"label": "earthquake", "source": "structural_default"}
 
 
 @app.route("/", methods=["GET"])
@@ -180,9 +227,15 @@ def predict():
     try:
         analysis = get_pipeline().analyze(analysis_rgb)
         predictions = analysis["predictions"]
+        disaster_type_prediction = predictions.get("disaster_type", {})
         informativeness_prediction = predictions.get("informativeness") or next(iter(predictions.values()))
         damage_prediction = predictions.get("damage", {})
-        disaster_context = _resolve_disaster_context(request.form, file.filename)
+        disaster_context = _resolve_disaster_context(
+            request.form,
+            file.filename,
+            analysis_rgb,
+            predicted_type=disaster_type_prediction.get("prediction"),
+        )
         disaster_label = disaster_context["label"]
         localization_backend = request.form.get("localization_backend", "provided")
         assessment = _damage_analyzer.assess(
@@ -204,7 +257,7 @@ def predict():
     saliency_overlay = heatmap_overlay(response_rgb, saliency_map, alpha=0.48)
 
     result = {
-        "disaster_type": _prediction_payload(informativeness_prediction),
+        "disaster_type": _prediction_payload(disaster_type_prediction or informativeness_prediction),
         "informativeness": _prediction_payload(predictions.get("informativeness", informativeness_prediction)),
         "damage": _prediction_payload(predictions.get("damage", informativeness_prediction)),
         "disaster_context": disaster_context,

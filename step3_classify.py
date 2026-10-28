@@ -41,13 +41,26 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
-from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
+from sklearn.model_selection import StratifiedKFold, cross_val_predict, cross_val_score, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import balanced_accuracy_score
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from skimage.feature import graycomatrix, graycoprops, local_binary_pattern
 from tqdm import tqdm
 
 from preprocessing.lbp import LBPFeatureExtractor, LBP_BINS
 from preprocessing.saliency import SaliencyAttention, saliency_to_rgb as saliency_map_to_rgb
+from models.calibration import (
+    AbstentionConfig,
+    CalibratedModelBundle,
+    MahalanobisOODGuard,
+    apply_multipliers,
+    disaster_miss_rate,
+    expected_calibration_error,
+    fit_probability_multipliers,
+    fit_temperature_scaling,
+    tune_abstention_thresholds,
+)
 from features.feature_contract import (
     get_pipeline_spec,
     resolve_artifact_spec,
@@ -67,6 +80,22 @@ try:
     import torch.nn as nn
     from torch.utils.data import DataLoader, Dataset
     import torchvision.transforms as transforms
+    try:
+        import huggingface_hub
+        if not hasattr(huggingface_hub, "repo_type_and_id_from_hf_id"):
+            def _repo_type_and_id_from_hf_id(repo_id: str):
+                if hasattr(huggingface_hub, "utils") and hasattr(huggingface_hub.utils, "parse_hf_uri"):
+                    parsed = huggingface_hub.utils.parse_hf_uri(repo_id)
+                    rtype = parsed.type or "model"
+                    fid = parsed.id or repo_id
+                else:
+                    rtype = "model"
+                    fid = repo_id
+                parts = fid.strip("/").split("/")
+                return (rtype, parts[0], "/".join(parts[1:])) if len(parts) >= 2 else (rtype, None, parts[0] if parts else "")
+            huggingface_hub.repo_type_and_id_from_hf_id = _repo_type_and_id_from_hf_id
+    except Exception:
+        pass
     import timm
 except Exception as exc:
     torch = None
@@ -98,10 +127,12 @@ IMG_SIZE = (299, 299)
 BATCH_SIZE = 64
 NUM_WORKERS = max(0, int(os.getenv("DISASTERRES_NUM_WORKERS", "0")))  # Windows-safe default
 
-OBJECTIVES = ("informativeness", "damage")
+OBJECTIVES = ("disaster_type", "damage", "informativeness")
 IMG_EXTS = (".jpg", ".jpeg", ".png")
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
+TIMM_NATIVE_MEAN = [0.5, 0.5, 0.5]
+TIMM_NATIVE_STD = [0.5, 0.5, 0.5]
 LBP_POINTS = 8
 LBP_RADIUS = 1
 LBP_METHOD = "uniform"
@@ -117,6 +148,14 @@ os.makedirs(FEATURE_CACHE_DIR, exist_ok=True)
 
 
 DEFAULT_LABEL_MAPS = {
+    "disaster_type": {
+        "earthquake": "earthquake",
+        "flood": "flood",
+        "hurricane": "hurricane",
+        "wildfire": "wildfire",
+        "landslide": "landslide",
+        "not_disaster": "not_disaster",
+    },
     "informativeness": {
         "earthquake": "informative",
         "flood": "informative",
@@ -178,7 +217,7 @@ def _is_image(name: str) -> bool:
     return name.lower().endswith(IMG_EXTS)
 
 
-def get_transforms(train: bool = False):
+def get_transforms(train: bool = False, timm_native: Optional[bool] = None):
     if transforms is None:
         raise RuntimeError("torchvision transforms are unavailable")
 
@@ -193,7 +232,10 @@ def get_transforms(train: bool = False):
     ops.extend(
         [
             transforms.ToTensor(),
-            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            transforms.Normalize(
+                mean=TIMM_NATIVE_MEAN if (timm_native if timm_native is not None else os.getenv("DISASTERRES_TIMM_NATIVE_NORM", "0") == "1") else IMAGENET_MEAN,
+                std=TIMM_NATIVE_STD if (timm_native if timm_native is not None else os.getenv("DISASTERRES_TIMM_NATIVE_NORM", "0") == "1") else IMAGENET_STD,
+            ),
         ]
     )
     return transforms.Compose(ops)
@@ -853,10 +895,15 @@ def _infer_label_map(objective: str, split_dir: str) -> Dict[str, str]:
     folder_names = [d for d in _safe_listdir(split_dir) if os.path.isdir(npath(split_dir, d))]
     lower = {d.lower() for d in folder_names}
 
+    if objective == "disaster_type":
+        return {name: name.lower() for name in folder_names}
+
     if objective == "informativeness" and {"informative", "not_informative"}.issubset(lower):
         return {name: name.lower() for name in folder_names}
+
     if objective == "damage" and {"severe", "mild", "little_or_none"}.issubset(lower):
         return {name: name.lower() for name in folder_names}
+
     return DEFAULT_LABEL_MAPS[objective]
 
 
@@ -961,6 +1008,38 @@ def load_cached_feature_matrix(
         return None
     return data[feature_set]
 
+def _try_load_cached_features(
+    paths: Sequence[str], split: str
+) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+    """Tries to find matching precomputed features for paths across all objectives."""
+    candidates = [
+        _feature_cache_path(obj, split)
+        for obj in ["disaster_type", "damage", "informativeness"]
+    ]
+    for cache_path in candidates:
+        if os.path.exists(cache_path):
+            try:
+                data = np.load(cache_path, allow_pickle=True)
+                cached_paths = data.get("image_paths")
+                if (
+                    cached_paths is not None
+                    and len(cached_paths) == len(paths)
+                    and str(cached_paths[0]) == str(paths[0])
+                    and str(cached_paths[-1]) == str(paths[-1])
+                    and np.array_equal(cached_paths, np.asarray(paths, dtype=object))
+                ):
+                    return (
+                        data["df1"],
+                        data["df2"],
+                        data["glcm"],
+                        data["lbp"],
+                        data["fused"],
+                    )
+            except Exception as exc:
+                print(f"[DEBUG] Could not load candidate cache '{cache_path}': {exc}")
+    return None
+
+
 
 def _load_shared_feature_models() -> Tuple[torch.nn.Module, torch.nn.Module]:
     if "feature_extractor" not in _shared_feature_models:
@@ -1004,6 +1083,108 @@ def _load_rf_bundle(objective: str):
             return clf, le, scaler, spec
     raise FileNotFoundError(f"Missing inference artifacts for objective '{objective}'")
 
+def extract_pooled_features_1536(
+    model,
+    image_paths: Sequence[str],
+    batch_size: int = BATCH_SIZE,
+    saliency_input: bool = False,
+    timm_native: bool = True,
+    show_progress: bool = False,
+) -> np.ndarray:
+    """Extract 1,536-dim penultimate pooled features (before ImageNet linear projection)."""
+    if model is None or torch is None:
+        return np.zeros((len(image_paths), 1536), dtype=np.float32)
+
+    model.eval()
+    transform = get_transforms(train=False, timm_native=timm_native)
+    device = get_device()
+    features: List[np.ndarray] = []
+
+    for i in tqdm(range(0, len(image_paths), batch_size), desc="  1536-D pooled", disable=not show_progress):
+        batch_paths = image_paths[i : i + batch_size]
+        imgs_batch = []
+        for path in batch_paths:
+            try:
+                with Image.open(path) as img:
+                    img_rgb = np.asarray(img.convert("RGB"), dtype=np.uint8)
+                if saliency_input:
+                    img_pil = Image.fromarray(saliency_to_rgb(simple_saliency_map(img_rgb)))
+                else:
+                    img_pil = Image.fromarray(img_rgb)
+                imgs_batch.append(transform(img_pil))
+            except Exception:
+                imgs_batch.append(torch.zeros((3, 299, 299), dtype=torch.float32))
+        if imgs_batch:
+            imgs_tensor = torch.stack(imgs_batch).to(device)
+            if device.type == "cuda":
+                imgs_tensor = imgs_tensor.half()
+            with torch.inference_mode():
+                feat_maps = model.forward_features(imgs_tensor)
+                pooled = model.forward_head(feat_maps, pre_logits=True)
+            features.append(pooled.detach().float().cpu().numpy())
+
+    return np.vstack(features) if features else np.zeros((len(image_paths), 1536), dtype=np.float32)
+
+
+def extract_mixed6a_features(
+    model,
+    image_paths: Sequence[str],
+    batch_size: int = BATCH_SIZE,
+    timm_native: bool = True,
+    show_progress: bool = False,
+) -> np.ndarray:
+    """Extract 1,088-dim global average pooled features from intermediate mixed_6a block."""
+    if model is None or torch is None or not hasattr(model, "mixed_6a"):
+        return np.zeros((len(image_paths), 1088), dtype=np.float32)
+
+    model.eval()
+    transform = get_transforms(train=False, timm_native=timm_native)
+    device = get_device()
+    hook_outputs: List[np.ndarray] = []
+
+    def _hook(module, inputs, output):
+        pooled = output.mean(dim=(2, 3))
+        hook_outputs.append(pooled.detach().float().cpu().numpy())
+
+    handle = model.mixed_6a.register_forward_hook(_hook)
+    features: List[np.ndarray] = []
+    try:
+        for i in tqdm(range(0, len(image_paths), batch_size), desc="  1088-D mixed_6a", disable=not show_progress):
+            batch_paths = image_paths[i : i + batch_size]
+            imgs_batch = []
+            for path in batch_paths:
+                try:
+                    with Image.open(path) as img:
+                        img_rgb = np.asarray(img.convert("RGB"), dtype=np.uint8)
+                    imgs_batch.append(transform(Image.fromarray(img_rgb)))
+                except Exception:
+                    imgs_batch.append(torch.zeros((3, 299, 299), dtype=torch.float32))
+            if imgs_batch:
+                imgs_tensor = torch.stack(imgs_batch).to(device)
+                if device.type == "cuda":
+                    imgs_tensor = imgs_tensor.half()
+                hook_outputs.clear()
+                with torch.inference_mode():
+                    _ = model.forward_features(imgs_tensor)
+                if hook_outputs:
+                    features.append(hook_outputs[0])
+    finally:
+        handle.remove()
+
+    return np.vstack(features) if features else np.zeros((len(image_paths), 1088), dtype=np.float32)
+
+
+@lru_cache(maxsize=len(OBJECTIVES))
+def _load_calibrated_bundle(objective: str, pipeline: str = FEATURE_PIPELINE):
+    bundle_path = npath(MODEL_DIR, f"calibrated_bundle_{objective}_{pipeline}.joblib")
+    if os.path.exists(bundle_path):
+        try:
+            return joblib.load(bundle_path)
+        except Exception as exc:
+            print(f"[WARN] Could not load calibrated bundle '{bundle_path}': {exc}")
+    return None
+
+
 def predict_image(image_path: str, objective: str) -> Dict[str, object]:
     """Run the paper-aligned fused inference path for one image."""
     if objective not in OBJECTIVES:
@@ -1041,7 +1222,38 @@ def predict_image(image_path: str, objective: str) -> Dict[str, object]:
         "feature_metadata": feature_spec.metadata(),
     }
     if confidence is not None:
-        result["confidence"] = confidence
+        cal_bundle = _load_calibrated_bundle(objective, feature_spec.name)
+        backend_mode = os.getenv("DISASTERRES_MODEL_BACKEND", "calibrated_rf").strip().lower()
+        if cal_bundle is not None and backend_mode != "legacy_rf" and probabilities is not None:
+            cal_eval = cal_bundle.evaluate_probabilities(
+                probabilities,
+                cnn_embedding=df1[0],
+                operating_mode=os.getenv("DISASTERRES_OPERATING_POINT", "default"),
+            )
+            result["prediction"] = cal_eval["prediction"]
+            result["effective_prediction"] = cal_eval["effective_prediction"]
+            result["uncertain"] = cal_eval["uncertain"]
+            result["confidence"] = cal_eval["confidence"]
+            result["raw_confidence"] = cal_eval["raw_confidence"]
+            result["top2"] = cal_eval["top2"]
+            result["top2_margin"] = cal_eval["top2_margin"]
+            result["calibrated_probabilities"] = cal_eval["probabilities"]
+            result["ood_flag"] = cal_eval["ood_flag"]
+            result["ood_score"] = cal_eval["ood_score"]
+            probabilities = np.array([cal_eval["probabilities"][str(c)] for c in le.classes_], dtype=np.float64)
+        else:
+            result["confidence"] = confidence
+            result["effective_prediction"] = pred_label
+            result["uncertain"] = False
+            order = np.argsort(probabilities)[::-1]
+            result["top2"] = [
+                {"label": str(le.classes_[order[0]]), "confidence": round(float(probabilities[order[0]]) * 100.0, 2)},
+                {"label": str(le.classes_[order[1]]), "confidence": round(float(probabilities[order[1]]) * 100.0, 2)},
+            ]
+            result["calibrated_probabilities"] = {
+                str(cls_name): float(prob) for cls_name, prob in zip(le.classes_, probabilities)
+            }
+            result["ood_flag"] = False
         result["probabilities"] = {
             cls_name: float(prob) for cls_name, prob in zip(le.classes_, probabilities)
         }
@@ -1085,36 +1297,50 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
             if aux_metrics:
                 print(f"[INFO] Optional PyTorch classifier metrics: {aux_metrics}")
 
-        print("\n[STEP] Loading frozen pretrained Inception-ResNet-V2 for L1 (original image)")
-        model_l1 = load_frozen_model(num_classes=1000)
-        if model_l1 is None:
-            return None
+        cached_train = _try_load_cached_features(train_paths, "train")
+        cached_test = _try_load_cached_features(test_paths, "test")
 
-        print("\n[STEP] Extracting L1 + L2 features in single batched pass")
-        df1_train, df2_train = extract_l1_l2_batched(model_l1, train_paths)
-        df1_test, df2_test = extract_l1_l2_batched(model_l1, test_paths)
-        print(f"  DF1 train shape: {df1_train.shape}, DF1 test shape: {df1_test.shape}")
-        print(f"  DF2 train shape: {df2_train.shape}, DF2 test shape: {df2_test.shape}")
+        if cached_train is not None and cached_test is not None:
+            print("[INFO] Reusing existing precomputed feature caches for train and test.")
+            df1_train, df2_train, glcm_train, lbp_train, x_train_raw = cached_train
+            df1_test, df2_test, glcm_test, lbp_test, x_test_raw = cached_test
+            print(f"  DF1 train shape: {df1_train.shape}, DF1 test shape: {df1_test.shape}")
+            print(f"  DF2 train shape: {df2_train.shape}, DF2 test shape: {df2_test.shape}")
+            print(f"  GLCM train shape: {glcm_train.shape}, GLCM test shape: {glcm_test.shape}")
+            print(f"  LBP train shape: {lbp_train.shape}, LBP test shape: {lbp_test.shape}")
+            print(f"  Fused train shape: {x_train_raw.shape}")
+            print(f"  Fused test shape:  {x_test_raw.shape}")
+        else:
+            print("\n[STEP] Loading frozen pretrained Inception-ResNet-V2 for L1 (original image)")
+            model_l1 = load_frozen_model(num_classes=1000)
+            if model_l1 is None:
+                return None
 
-        del model_l1
-        if torch is not None and torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            print("\n[STEP] Extracting L1 + L2 features in single batched pass")
+            df1_train, df2_train = extract_l1_l2_batched(model_l1, train_paths)
+            df1_test, df2_test = extract_l1_l2_batched(model_l1, test_paths)
+            print(f"  DF1 train shape: {df1_train.shape}, DF1 test shape: {df1_test.shape}")
+            print(f"  DF2 train shape: {df2_train.shape}, DF2 test shape: {df2_test.shape}")
 
-        print("[STEP] Extracting L3 handcrafted features (GLCM) - HF (20-dim)")
-        glcm_train = extract_all_glcm(train_paths)
-        glcm_test = extract_all_glcm(test_paths)
-        print(f"  GLCM train shape: {glcm_train.shape}, GLCM test shape: {glcm_test.shape}")
+            del model_l1
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
-        print("[STEP] Extracting L4 handcrafted features (LBP) - LT (10-dim)")
-        lbp_train = extract_all_lbp(train_paths)
-        lbp_test = extract_all_lbp(test_paths)
-        print(f"  LBP train shape: {lbp_train.shape}, LBP test shape: {lbp_test.shape}")
+            print("[STEP] Extracting L3 handcrafted features (GLCM) - HF (20-dim)")
+            glcm_train = extract_all_glcm(train_paths)
+            glcm_test = extract_all_glcm(test_paths)
+            print(f"  GLCM train shape: {glcm_train.shape}, GLCM test shape: {glcm_test.shape}")
 
-        print("\n[STEP] Fusing features: [DF1(1000) | DF2(1000) | HF(20) | LT(10)] = 2030-dim")
-        x_train_raw = np.hstack([df1_train, df2_train, glcm_train, lbp_train])
-        x_test_raw = np.hstack([df1_test, df2_test, glcm_test, lbp_test])
-        print(f"  Fused train shape: {x_train_raw.shape}")
-        print(f"  Fused test shape:  {x_test_raw.shape}")
+            print("[STEP] Extracting L4 handcrafted features (LBP) - LT (10-dim)")
+            lbp_train = extract_all_lbp(train_paths)
+            lbp_test = extract_all_lbp(test_paths)
+            print(f"  LBP train shape: {lbp_train.shape}, LBP test shape: {lbp_test.shape}")
+
+            print("\n[STEP] Fusing features: [DF1(1000) | DF2(1000) | HF(20) | LT(10)] = 2030-dim")
+            x_train_raw = np.hstack([df1_train, df2_train, glcm_train, lbp_train])
+            x_test_raw = np.hstack([df1_test, df2_test, glcm_test, lbp_test])
+            print(f"  Fused train shape: {x_train_raw.shape}")
+            print(f"  Fused test shape:  {x_test_raw.shape}")
 
         train_cache_path = save_feature_cache(
             objective,
@@ -1148,15 +1374,45 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
         clf = RandomForestClassifier(
             n_estimators=300,
             max_features="sqrt",
-            class_weight="balanced",
+            class_weight="balanced_subsample",
+            min_samples_leaf=3,
             random_state=42,
-            n_jobs=-1,
+            n_jobs=4,
             verbose=1,
         )
 
         print("[INFO] Running Stratified K-Fold Cross Validation (5 folds)...")
         skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        cv_scores = cross_val_score(clf, x_train, y_train, cv=skf, scoring="accuracy")
+        cv_pipe = Pipeline([("scaler", StandardScaler()), ("clf", clf)])
+        oof_probs = cross_val_predict(cv_pipe, x_train_raw, y_train, cv=skf, method="predict_proba", n_jobs=1)
+        classes_list = [str(c) for c in le.classes_]
+        not_dis_idx = classes_list.index("not_disaster") if "not_disaster" in classes_list else None
+        best_w, oof_tuned_stats = fit_probability_multipliers(
+            oof_probs, y_train, not_disaster_idx=not_dis_idx, disaster_miss_penalty=1.0
+        )
+        w_cost_2x, _ = fit_probability_multipliers(
+            oof_probs, y_train, not_disaster_idx=not_dis_idx, disaster_miss_penalty=2.0
+        )
+        w_cost_3x, _ = fit_probability_multipliers(
+            oof_probs, y_train, not_disaster_idx=not_dis_idx, disaster_miss_penalty=3.0
+        )
+        oof_adj_probs = apply_multipliers(oof_probs, best_w)
+        best_temp, ece_before, ece_after = fit_temperature_scaling(oof_adj_probs, y_train)
+        cal_oof_probs = apply_multipliers(oof_probs, best_w, temperature=best_temp)
+        abstention_cfg, _ = tune_abstention_thresholds(cal_oof_probs, y_train, classes=classes_list)
+        ood_guard = MahalanobisOODGuard(percentile_threshold=98.5).fit(df1_train, y_train)
+
+        oof_cal_preds = np.argmax(cal_oof_probs, axis=1)
+        cv_scores_list, cv_f1_list, cv_bal_list = [], [], []
+        for _, val_idx in skf.split(x_train_raw, y_train):
+            cv_scores_list.append(float(accuracy_score(y_train[val_idx], oof_cal_preds[val_idx])))
+            cv_f1_list.append(float(f1_score(y_train[val_idx], oof_cal_preds[val_idx], average="macro", zero_division=0)))
+            cv_bal_list.append(float(balanced_accuracy_score(y_train[val_idx], oof_cal_preds[val_idx])))
+        cv_scores = np.asarray(cv_scores_list)
+        cv_f1_macro_mean = float(np.mean(cv_f1_list))
+        cv_f1_macro_std = float(np.std(cv_f1_list))
+        cv_balanced_acc_mean = float(np.mean(cv_bal_list))
+        cv_balanced_acc_std = float(np.std(cv_bal_list))
         cv_mean = float(cv_scores.mean())
         cv_std = float(cv_scores.std())
         print(f"[RESULT] CV Accuracy: {cv_mean:.4f} +/- {cv_std:.4f}")
@@ -1167,11 +1423,16 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
             print(f"[ERROR] Random Forest training failed: {exc}")
             return None
 
-        y_pred = clf.predict(x_test)
+        raw_test_probs = clf.predict_proba(x_test)
+        cal_test_probs = apply_multipliers(raw_test_probs, best_w, temperature=best_temp)
+        y_pred = np.argmax(cal_test_probs, axis=1)
+        test_ece_cal = expected_calibration_error(cal_test_probs, y_test)
         acc = float(accuracy_score(y_test, y_pred))
         precision = float(precision_score(y_test, y_pred, average="weighted", zero_division=0))
         recall = float(recall_score(y_test, y_pred, average="weighted", zero_division=0))
         f1 = float(f1_score(y_test, y_pred, average="weighted", zero_division=0))
+        f1_macro = float(f1_score(y_test, y_pred, average="macro", zero_division=0))
+        bal_acc = float(balanced_accuracy_score(y_test, y_pred))
         cm = confusion_matrix(y_test, y_pred)
 
         print(f"\n[RESULT] Test accuracy={acc:.4f}, precision={precision:.4f}, recall={recall:.4f}, f1={f1:.4f}")
@@ -1187,6 +1448,33 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
             joblib.dump(clf, model_path)
             joblib.dump(le, encoder_path)
             joblib.dump(scaler, scaler_path)
+            cal_bundle = CalibratedModelBundle(
+                objective=objective,
+                feature_pipeline=FEATURE_PIPELINE,
+                classes=classes_list,
+                multipliers=[float(x) for x in best_w],
+                temperature=best_temp,
+                abstention=abstention_cfg,
+                operating_point="macro_f1_optimal",
+                cost_sensitive_multipliers={
+                    "cost_2x": [float(x) for x in w_cost_2x],
+                    "cost_3x": [float(x) for x in w_cost_3x],
+                },
+                ood_guard=ood_guard,
+                metadata={
+                    "cv_f1_macro_mean": round(cv_f1_macro_mean, 4),
+                    "cv_f1_macro_std": round(cv_f1_macro_std, 4),
+                    "cv_balanced_acc_mean": round(cv_balanced_acc_mean, 4),
+                    "cv_balanced_acc_std": round(cv_balanced_acc_std, 4),
+                    "test_f1_macro": round(f1_macro, 4),
+                    "test_balanced_accuracy": round(bal_acc, 4),
+                    "test_ece": round(test_ece_cal, 4),
+                },
+            )
+            bundle_path = npath(MODEL_DIR, f"calibrated_bundle_{objective}_{FEATURE_PIPELINE}.joblib")
+            joblib.dump(cal_bundle, bundle_path)
+            _load_rf_bundle.cache_clear()
+            _load_calibrated_bundle.cache_clear()
             if objective == "informativeness":
                 compat_encoder_path = npath(MODEL_DIR, "le_disaster_type.joblib")
                 joblib.dump(le, compat_encoder_path)
@@ -1258,20 +1546,29 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
                 "f1": f1,
                 "cv_accuracy_mean": cv_mean,
                 "cv_accuracy_std": cv_std,
+                "f1_macro": f1_macro,
+                "balanced_accuracy": bal_acc,
+                "cv_f1_macro_mean": cv_f1_macro_mean,
+                "cv_f1_macro_std": cv_f1_macro_std,
+                "cv_balanced_acc_mean": cv_balanced_acc_mean,
+                "cv_balanced_acc_std": cv_balanced_acc_std,
                 "train_images": float(len(train_paths)),
                 "test_images": float(len(test_paths)),
                 "feature_dim": float(x_train.shape[1]),
             }
         )
-        mlflow.sklearn.log_model(clf, f"rf_model_{objective}")
-        mlflow.log_artifact(encoder_path)
-        mlflow.log_artifact(scaler_path)
-        mlflow.log_artifact(train_cache_path)
-        mlflow.log_artifact(test_cache_path)
-        if cm_path:
-            mlflow.log_artifact(cm_path)
-        mlflow.log_artifact(importances_path)
-        mlflow.log_artifact(metrics_path)
+        try:
+            mlflow.sklearn.log_model(clf, f"rf_model_{objective}")
+            mlflow.log_artifact(encoder_path)
+            mlflow.log_artifact(scaler_path)
+            mlflow.log_artifact(train_cache_path)
+            mlflow.log_artifact(test_cache_path)
+            if cm_path:
+                mlflow.log_artifact(cm_path)
+            mlflow.log_artifact(importances_path)
+            mlflow.log_artifact(metrics_path)
+        except Exception as exc:
+            print(f"[WARN] MLflow model/artifact logging skipped: {exc}")
 
         inference_spec = {
             "objective": objective,
@@ -1286,7 +1583,10 @@ def train_and_evaluate(objective: str, torch_cfg: Optional[TorchTrainingConfig] 
         spec_path = npath(RESULT_DIR, f"inference_spec_{objective}.json")
         with open(spec_path, "w", encoding="utf-8") as fobj:
             json.dump(inference_spec, fobj, indent=2)
-        mlflow.log_artifact(spec_path)
+        try:
+            mlflow.log_artifact(spec_path)
+        except Exception as exc:
+            print(f"[WARN] MLflow spec artifact logging skipped: {exc}")
 
         print(f"\n[INFO] Model saved: {model_path}")
         print(f"[INFO] Label encoder saved: {encoder_path}")
