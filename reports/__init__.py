@@ -1,1 +1,1 @@
-﻿1"""Reporting package for generated research artifacts."""
+"""Reporting package for generated research artifacts."""
