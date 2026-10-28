@@ -1,4 +1,4 @@
-﻿"""Shared feature-pipeline contracts for training, evaluation, and inference.
+"""Shared feature-pipeline contracts for training, evaluation, and inference.
 
 The project historically used several names for closely related feature sets.
 This module is the single source of truth for feature dimensions, names, and
@@ -15,6 +15,9 @@ import numpy as np
 
 CNN_ORIGINAL_DIM = 1000
 CNN_SALIENCY_DIM = 1000
+CNN_POOLED_DIM = 1536
+CNN_SALIENCY_POOLED_DIM = 1536
+CNN_MIXED6A_DIM = 1088
 GLCM_DIM = 20
 LBP_HIST_DIM = 10
 LBP_STATS_DIM = 16
@@ -23,16 +26,21 @@ LBP_STATS_DIM = 16
 STREAM_DIMS: Dict[str, int] = {
     "cnn_original": CNN_ORIGINAL_DIM,
     "cnn_saliency": CNN_SALIENCY_DIM,
+    "cnn_pooled": CNN_POOLED_DIM,
+    "cnn_saliency_pooled": CNN_SALIENCY_POOLED_DIM,
+    "cnn_mixed6a": CNN_MIXED6A_DIM,
     "glcm": GLCM_DIM,
     "lbp_hist": LBP_HIST_DIM,
     "lbp_stats": LBP_STATS_DIM,
 }
 
 PIPELINE_ALIASES: Dict[str, List[str]] = {
+    "df1_only": ["cnn_original"],
     "cnn": ["cnn_original", "cnn_saliency"],
     "glcm": ["glcm"],
     "lbp": ["lbp_stats"],
     "lbp_hist": ["lbp_hist"],
+    "df1_glcm_lbp_stats": ["cnn_original", "glcm", "lbp_stats"],
     "cnn_lbp": ["cnn_original", "cnn_saliency", "lbp_stats"],
     "cnn_glcm": ["cnn_original", "cnn_saliency", "glcm"],
     "glcm_lbp": ["glcm", "lbp_stats"],
@@ -40,12 +48,23 @@ PIPELINE_ALIASES: Dict[str, List[str]] = {
     "df1_df2_glcm": ["cnn_original", "cnn_saliency", "glcm"],
     "df1_df2_glcm_lbp": ["cnn_original", "cnn_saliency", "glcm", "lbp_hist"],
     "df1_df2_glcm_lbp_stats": ["cnn_original", "cnn_saliency", "glcm", "lbp_stats"],
+    "v3_df1536_only": ["cnn_pooled"],
+    "v3_df1536_glcm_lbp_stats": ["cnn_pooled", "glcm", "lbp_stats"],
+    "v3_df1536_df2_glcm_lbp_stats": ["cnn_pooled", "cnn_saliency_pooled", "glcm", "lbp_stats"],
+    "v3_df1536_mixed6a_glcm_lbp_stats": ["cnn_pooled", "cnn_mixed6a", "glcm", "lbp_stats"],
 }
 
 LEGACY_PIPELINE_BY_DIM: Dict[int, str] = {
+    1000: "df1_only",
+    1036: "df1_glcm_lbp_stats",
+    1536: "v3_df1536_only",
+    1572: "v3_df1536_glcm_lbp_stats",
+    2000: "cnn",
     2020: "df1_df2_glcm",
     2030: "df1_df2_glcm_lbp",
     2036: "df1_df2_glcm_lbp_stats",
+    2660: "v3_df1536_mixed6a_glcm_lbp_stats",
+    3108: "v3_df1536_df2_glcm_lbp_stats",
 }
 
 
@@ -83,6 +102,12 @@ def names_for_stream(stream: str) -> List[str]:
         return [f"cnn_original_{idx + 1}" for idx in range(CNN_ORIGINAL_DIM)]
     if stream == "cnn_saliency":
         return [f"cnn_saliency_{idx + 1}" for idx in range(CNN_SALIENCY_DIM)]
+    if stream == "cnn_pooled":
+        return [f"cnn_pooled_{idx + 1}" for idx in range(CNN_POOLED_DIM)]
+    if stream == "cnn_saliency_pooled":
+        return [f"cnn_saliency_pooled_{idx + 1}" for idx in range(CNN_SALIENCY_POOLED_DIM)]
+    if stream == "cnn_mixed6a":
+        return [f"cnn_mixed6a_{idx + 1}" for idx in range(CNN_MIXED6A_DIM)]
     if stream == "glcm":
         angles = ["0", "45", "90", "135"]
         props = ["contrast", "correlation", "energy", "homogeneity", "entropy"]
