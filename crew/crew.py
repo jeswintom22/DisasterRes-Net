@@ -81,7 +81,7 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
     token = current_run.set(run)
     try:
         gate = ImageSuitabilityGate()
-        assessments, confidences, accepted_urls = [], [], []
+        assessments, confidences, accepted_urls, extra_caveats = [], [], [], []
         if image_data:
             _emit(run, event_sink, "resolve", "Handling direct image upload.")
             from datetime import date
@@ -129,7 +129,18 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
                 analysis, assessment = analyze_image(image, event_type.lower() if event_type != "Disaster Assessment" else "earthquake", localization_backend=loc_backend)
                 
                 from dataclasses import replace
-                model_pred_type = (analysis.get("predictions", {}).get("disaster_type") or {}).get("prediction")
+                dis_pred_obj = analysis.get("predictions", {}).get("disaster_type") or {}
+                model_pred_type = dis_pred_obj.get("prediction")
+                if dis_pred_obj.get("uncertain"):
+                    top2_list = dis_pred_obj.get("top2") or []
+                    if len(top2_list) >= 2:
+                        c1 = f"{top2_list[0]['label']} ({top2_list[0]['confidence']}%)"
+                        c2 = f"{top2_list[1]['label']} ({top2_list[1]['confidence']}%)"
+                        extra_caveats.append(f"Peril classifier flagged close boundary uncertainty between {c1} and {c2}; verify scene context.")
+                    else:
+                        extra_caveats.append("Peril classifier flagged low calibrated confidence on this image.")
+                if dis_pred_obj.get("ood_flag"):
+                    extra_caveats.append("Out-of-distribution visual embedding detected (Mahalanobis guard); treat automated classification with caution.")
                 final_event_type = scout.event_type
                 if event_type == "Disaster Assessment":
                     if model_pred_type and model_pred_type not in ("unknown", "not_disaster"):
@@ -206,7 +217,14 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
 
         if not scout.image_handles:
             scout.degraded_sources.append("No source returned a suitable image; generated a text-only event briefing.")
-        analysis_result = aggregate_assessments(scout.location, scout.event_type, assessments, confidences, len(scout.rejected))
+        analysis_result = aggregate_assessments(
+            scout.location,
+            scout.event_type,
+            assessments,
+            confidences,
+            len(scout.rejected),
+            extra_caveats=extra_caveats,
+        )
         facts = FactsBlock(run.run_id, scout, analysis_result)
         deterministic_response = render_report(facts)
         response, narration_mode = _openai_narrate(facts, deterministic_response, event_sink, run)

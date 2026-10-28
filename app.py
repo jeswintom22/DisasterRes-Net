@@ -56,11 +56,19 @@ def _percent(value: float) -> float:
 
 def _prediction_payload(prediction: dict) -> dict:
     probabilities = prediction.get("probabilities", {}) or {}
+    cal_probs = prediction.get("calibrated_probabilities") or probabilities
     top5 = sorted(probabilities.items(), key=lambda item: item[1], reverse=True)[:5]
+    top2 = prediction.get("top2") or [{"label": key, "confidence": _percent(value)} for key, value in top5[:2]]
+    pred_label = prediction.get("prediction", "unknown")
     return {
-        "prediction": prediction.get("prediction", "unknown"),
+        "prediction": pred_label,
+        "effective_prediction": prediction.get("effective_prediction") or pred_label,
+        "uncertain": bool(prediction.get("uncertain", False)),
+        "ood_flag": bool(prediction.get("ood_flag", False)),
         "confidence": _percent(prediction.get("confidence", 0.0)),
         "probabilities": {key: _percent(value) for key, value in probabilities.items()},
+        "calibrated_probabilities": {key: _percent(value) for key, value in cal_probs.items()},
+        "top2": top2,
         "top5": [{"label": key, "confidence": _percent(value)} for key, value in top5],
         "feature_dim": prediction.get("feature_dim", 0),
         "fusion": prediction.get("fusion", {}),
