@@ -1,4 +1,4 @@
-"""Step 2: clean, deduplicate, resize, and split dataset."""
+"""Step 2: clean, deduplicate (MD5 + perceptual dHash), filter banners, resize, and split dataset."""
 
 import concurrent.futures
 import hashlib
@@ -7,6 +7,7 @@ import os
 import shutil
 from typing import Dict, List, Tuple
 
+import numpy as np
 from PIL import Image, UnidentifiedImageError
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
@@ -50,6 +51,27 @@ def get_md5(filepath: str, chunk_size: int = 1024 * 1024) -> str:
         return ""
 
 
+def compute_dhash(img: Image.Image, hash_size: int = 8) -> str:
+    """Compute 64-bit perceptual difference hash (dHash) to catch near-duplicate images."""
+    gray = img.convert("L").resize((hash_size + 1, hash_size), Image.Resampling.LANCZOS)
+    pixels = np.asarray(gray, dtype=np.int16)
+    diff = pixels[:, 1:] > pixels[:, :-1]
+    bits = diff.flatten()
+    val = 0
+    for b in bits:
+        val = (val << 1) | int(b)
+    return f"{val:016x}"
+
+
+def _is_degenerate_banner(img: Image.Image) -> bool:
+    """Return True if image is too small (<32x32) or a blank solid-color graphic."""
+    w, h = img.size
+    if w < 32 or h < 32:
+        return True
+    gray = np.asarray(img.convert("L"), dtype=np.float32)
+    return float(np.std(gray)) < 2.0
+
+
 def _list_raw_categories() -> List[str]:
     categories: List[str] = []
     skip_dirs = {"_downloads", "crisismmd_v2.0"}
@@ -70,29 +92,35 @@ def _list_raw_categories() -> List[str]:
     return categories
 
 
-def _process_single_image(src: str, dst: str) -> Tuple[str, str]:
-    """Process single image: compute hash and convert/resize."""
+def _process_single_image(src: str, dst: str) -> Tuple[str, str, str]:
+    """Process single image: compute MD5 + perceptual dHash, check banner quality, and convert/resize."""
     try:
-        if os.path.isfile(dst) and os.path.getsize(dst) > 0:
-            src_hash = get_md5(src)
-            return src_hash, "saved"
         src_hash = get_md5(src)
         if not src_hash:
-            return "", "error"
+            return "", "", "error"
+
+        if os.path.isfile(dst) and os.path.getsize(dst) > 0:
+            with Image.open(dst) as existing_img:
+                dhash = compute_dhash(existing_img)
+            return src_hash, dhash, "saved"
+
         with Image.open(src) as img:
             img = img.convert("RGB")
+            if _is_degenerate_banner(img):
+                return src_hash, "", "corrupt"
+            dhash = compute_dhash(img)
             img = img.resize(IMG_SIZE, Image.Resampling.LANCZOS)
             img.save(dst, "JPEG", quality=90)
-        return src_hash, "saved"
+        return src_hash, dhash, "saved"
     except UnidentifiedImageError:
-        return "", "corrupt"
+        return "", "", "corrupt"
     except Exception:
-        return "", "error"
+        return "", "", "error"
 
 
 def clean_and_resize() -> Dict[str, Dict[str, int]]:
     print("=" * 60)
-    print("STEP 2 - PHASE 1: CLEAN + RESIZE (PARALLEL)")
+    print("STEP 2 - PHASE 1: CLEAN + DEDUPLICATE (MD5 + dHash) + RESIZE")
     print("=" * 60)
 
     try:
@@ -102,6 +130,7 @@ def clean_and_resize() -> Dict[str, Dict[str, int]]:
         return {}
 
     seen_hashes = set()
+    seen_dhashes = set()
     stats: Dict[str, Dict[str, int]] = {}
 
     categories = _list_raw_categories()
@@ -122,11 +151,12 @@ def clean_and_resize() -> Dict[str, Dict[str, int]]:
             files = [f for f in os.listdir(raw_cat_dir) if f.lower().endswith(IMG_EXTS)]
         except OSError as exc:
             print(f"[ERROR] Could not list files in '{raw_cat_dir}': {exc}")
-            stats[category] = {"saved": 0, "duplicates_removed": 0, "errors": 1}
+            stats[category] = {"saved": 0, "duplicates_removed": 0, "perceptual_duplicates_removed": 0, "errors": 1}
             continue
 
         saved = 0
         dupes = 0
+        perceptual_dupes = 0
         corrupt = 0
         read_errors = 0
 
@@ -139,11 +169,18 @@ def clean_and_resize() -> Dict[str, Dict[str, int]]:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
             future_to_dst = {executor.submit(_process_single_image, src, dst): dst for src, dst in tasks}
-            for future in tqdm(concurrent.futures.as_completed(future_to_dst), total=len(future_to_dst), desc=f"  {category:14s}"):
-                src_hash, status = future.result()
+            for future in tqdm(
+                concurrent.futures.as_completed(future_to_dst),
+                total=len(future_to_dst),
+                desc=f"  {category:14s}",
+            ):
+                src_hash, dhash, status = future.result()
                 if status == "saved":
-                    if src_hash in seen_hashes:
-                        dupes += 1
+                    if src_hash in seen_hashes or (dhash and dhash in seen_dhashes):
+                        if src_hash in seen_hashes:
+                            dupes += 1
+                        else:
+                            perceptual_dupes += 1
                         dst_file = future_to_dst[future]
                         if os.path.isfile(dst_file):
                             try:
@@ -152,6 +189,8 @@ def clean_and_resize() -> Dict[str, Dict[str, int]]:
                                 pass
                     else:
                         seen_hashes.add(src_hash)
+                        if dhash:
+                            seen_dhashes.add(dhash)
                         saved += 1
                 elif status == "corrupt":
                     corrupt += 1
@@ -160,10 +199,15 @@ def clean_and_resize() -> Dict[str, Dict[str, int]]:
 
         stats[category] = {
             "saved": saved,
-            "duplicates_removed": dupes,
+            "duplicates_removed": dupes + perceptual_dupes,
+            "exact_md5_duplicates": dupes,
+            "perceptual_dhash_duplicates": perceptual_dupes,
             "errors": corrupt + read_errors,
         }
-        print(f"  {category:14s}: saved={saved}, duplicates={dupes}, errors={corrupt + read_errors}")
+        print(
+            f"  {category:14s}: saved={saved}, md5_dupes={dupes}, "
+            f"dhash_dupes={perceptual_dupes}, errors={corrupt + read_errors}"
+        )
 
     return stats
 
@@ -194,7 +238,7 @@ def split_dataset() -> Dict[str, Dict[str, int]]:
     for category in categories:
         cat_dir = npath(CLEAN_DIR, category)
         try:
-            files = [f for f in os.listdir(cat_dir) if f.lower().endswith(".jpg")]
+            files = sorted([f for f in os.listdir(cat_dir) if f.lower().endswith(".jpg")])
         except OSError as exc:
             print(f"[ERROR] Could not list '{cat_dir}': {exc}")
             continue
@@ -214,7 +258,7 @@ def split_dataset() -> Dict[str, Dict[str, int]]:
                 if os.path.isfile(d) and os.path.getsize(d) > 0:
                     return
                 shutil.copy2(s, d)
-            except (OSError, shutil.Error) as exc:
+            except (OSError, shutil.Error):
                 pass
 
         copy_tasks = []
@@ -246,14 +290,16 @@ def print_summary(clean_stats: Dict[str, Dict[str, int]], split_stats: Dict[str,
     print("=" * 60)
 
     total_clean = sum(v.get("saved", 0) for v in clean_stats.values())
+    total_dupes = sum(v.get("duplicates_removed", 0) for v in clean_stats.values())
     total_train = sum(v.get("train", 0) for v in split_stats.values())
     total_test = sum(v.get("test", 0) for v in split_stats.values())
 
-    print(f"  cleaned images: {total_clean}")
-    print(f"  train images  : {total_train}")
-    print(f"  test images   : {total_test}")
-    print(f"  total split   : {total_train + total_test}")
-    print(f"  target size   : {IMG_SIZE[0]}x{IMG_SIZE[1]}")
+    print(f"  cleaned images   : {total_clean}")
+    print(f"  duplicates pruned: {total_dupes}")
+    print(f"  train images     : {total_train}")
+    print(f"  test images      : {total_test}")
+    print(f"  total split      : {total_train + total_test}")
+    print(f"  target size      : {IMG_SIZE[0]}x{IMG_SIZE[1]}")
 
 
 def main() -> int:
@@ -266,16 +312,20 @@ def main() -> int:
 
     try:
         import mlflow
+
         mlflow.set_tracking_uri("sqlite:///mlflow.db")
         mlflow.set_experiment("DisasterRes-Net")
 
         with mlflow.start_run(run_name="step2_preprocessing"):
             mlflow.set_tags({"step": "step2_preprocessing", "framework": "DisasterRes-Net"})
-            mlflow.log_params({
-                "img_size": f"{IMG_SIZE[0]}x{IMG_SIZE[1]}",
-                "test_size": TEST_SIZE,
-                "random_seed": RANDOM_SEED,
-            })
+            mlflow.log_params(
+                {
+                    "img_size": f"{IMG_SIZE[0]}x{IMG_SIZE[1]}",
+                    "test_size": TEST_SIZE,
+                    "random_seed": RANDOM_SEED,
+                    "deduplication": "md5+dhash64",
+                }
+            )
             total_clean = sum(v.get("saved", 0) for v in clean_stats.values())
             total_dupes = sum(v.get("duplicates_removed", 0) for v in clean_stats.values())
             total_train = sum(v.get("train", 0) for v in split_stats.values())
@@ -299,13 +349,17 @@ def main() -> int:
             summary_path = npath(CLEAN_DIR, "step2_summary.json")
             os.makedirs(CLEAN_DIR, exist_ok=True)
             with open(summary_path, "w", encoding="utf-8") as fobj:
-                json.dump({
-                    "clean_stats": clean_stats,
-                    "split_stats": split_stats,
-                    "total_clean": total_clean,
-                    "total_train": total_train,
-                    "total_test": total_test
-                }, fobj, indent=2)
+                json.dump(
+                    {
+                        "clean_stats": clean_stats,
+                        "split_stats": split_stats,
+                        "total_clean": total_clean,
+                        "total_train": total_train,
+                        "total_test": total_test,
+                    },
+                    fobj,
+                    indent=2,
+                )
             mlflow.log_artifact(summary_path)
             print("[INFO] Step 2 preprocessing successfully logged to MLflow experiment 'DisasterRes-Net'.")
     except Exception as exc:

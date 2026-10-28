@@ -164,7 +164,7 @@ def validate_before_step3() -> Tuple[bool, List[str]]:
 
 def load_accuracy_results() -> Dict[str, float]:
     out: Dict[str, float] = {}
-    for objective in ("informativeness", "damage"):
+    for objective in ("disaster_type", "damage", "informativeness"):
         metrics_path = npath(RESULT_DIR, f"metrics_{objective}.json")
         if not os.path.isfile(metrics_path):
             continue
