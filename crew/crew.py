@@ -1,4 +1,5 @@
 from __future__ import annotations
+import inspect
 import json
 import os
 from pathlib import Path
@@ -6,14 +7,22 @@ from typing import Callable, Any
 import httpx
 from .cache import get as cache_get, set as cache_set
 from .context import RunContext, current_run
-from .resolve import resolve_event, resolve_query
+from .resolve import (
+    geocode,
+    geocode_resolved_query,
+    resolve_event,
+    resolve_query,
+    reverse_geocode,
+)
 from .report import FactsBlock, ScoutResult, render_report
 from .report.validator import NumericFidelityValidator
+from .sources.gdacs import GDACSSource, haversine_km
 from .tools.aggregator import aggregate_assessments
 from .tools.image_dl import ImageDownloaderTool
 from .tools.image_search import GoogleImageScrapeTool
 from .tools.pipeline_tool import analyze_image
 from .trace import write_trace
+from .vision.exif_gps import extract_exif_gps
 from .vision.gate import ImageSuitabilityGate
 
 def _load_local_env() -> None:
@@ -67,6 +76,23 @@ def _to_b64(img, fmt="JPEG"):
     _, buf = cv2.imencode(f'.{fmt.lower()}', img)
     return f"data:image/{fmt.lower()};base64," + base64.b64encode(buf).decode('utf-8')
 
+
+def _call_resolve_event(resolved_query, geo_info=None):
+    """Invoke resolve_event preserving compatibility with single-arg test mocks."""
+    try:
+        sig = inspect.signature(resolve_event)
+        if "geo" in sig.parameters:
+            return resolve_event(
+                resolved_query.location,
+                geo=geo_info,
+                hazard_hint=resolved_query.hazard_hint,
+                time_hint=resolved_query.time_hint,
+            )
+    except (ValueError, TypeError):
+        pass
+    return resolve_event(resolved_query.location)
+
+
 def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Callable[[dict[str, Any]], None] | None = None, return_payload: bool = False):
     _load_local_env()
     normalized = "v3:" + " ".join(query.lower().split())
@@ -88,20 +114,74 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
             today_str = date.today().strftime("%B %d, %Y")
             
             resolved_loc = "Uploaded Scene"
+            resolution_method = "none"
+            resolved_coords: tuple[float, float] | None = None
+            disambig_note: str | None = None
             event_type = "Disaster Assessment"
+            prompt_resolved = None
+
             if query and query.strip().lower() not in ("analyze this imagery", "upload", ""):
                 try:
-                    resolved = resolve_query(query)
-                    if resolved.location:
-                        resolved_loc = resolved.location
+                    prompt_resolved = resolve_query(query)
+                    if prompt_resolved.location:
+                        resolved_loc = prompt_resolved.location
+                        resolution_method = prompt_resolved.resolution_method
+                    if prompt_resolved.hazard_hint:
+                        event_type = prompt_resolved.hazard_hint.title()
                 except Exception:
                     pass
-                for peril in ("earthquake", "flood", "hurricane", "wildfire", "landslide"):
-                    if peril in query.lower():
-                        event_type = peril.title()
-                        break
+                if event_type == "Disaster Assessment":
+                    for peril in ("earthquake", "flood", "hurricane", "wildfire", "landslide"):
+                        if peril in query.lower():
+                            event_type = peril.title()
+                            break
+
+            # FR-7 & EC-5: Extract EXIF GPS coordinates from uploaded imagery if available
+            exif_coords = extract_exif_gps(image_data)
+            if exif_coords is not None:
+                exif_lat, exif_lon = exif_coords
+                if resolved_loc == "Uploaded Scene":
+                    exif_geo = reverse_geocode(exif_lat, exif_lon)
+                    if exif_geo is not None:
+                        resolved_loc = exif_geo.display_name
+                    else:
+                        resolved_loc = f"GPS ({exif_lat:.4f}, {exif_lon:.4f})"
+                    resolution_method = "exif_gps"
+                    resolved_coords = (exif_lat, exif_lon)
+                    extra_caveats.append(
+                        f"Scene location resolved from uploaded image EXIF GPS metadata ({exif_lat:.4f}, {exif_lon:.4f})."
+                    )
+                elif prompt_resolved is not None and prompt_resolved.location:
+                    prompt_geo = geocode_resolved_query(prompt_resolved)
+                    if prompt_geo is not None:
+                        resolved_coords = (prompt_geo.latitude, prompt_geo.longitude)
+                        disambig_note = prompt_geo.disambiguation_note
+                        dist_km = haversine_km(
+                            prompt_geo.latitude,
+                            prompt_geo.longitude,
+                            exif_lat,
+                            exif_lon,
+                        )
+                        if dist_km > 50.0:
+                            extra_caveats.append(
+                                f"Uploaded image EXIF GPS ({exif_lat:.4f}, {exif_lon:.4f}) is {dist_km:.0f} km from queried location '{resolved_loc}'."
+                            )
+
+            if disambig_note:
+                extra_caveats.append(disambig_note)
             
-            scout = ScoutResult(resolved_loc, "upload", event_type, today_str, "User uploaded evidence imagery", sources=["Direct Upload"], degraded_sources=[])
+            scout = ScoutResult(
+                resolved_loc,
+                "upload",
+                event_type,
+                today_str,
+                "User uploaded evidence imagery",
+                sources=["Direct Upload"],
+                degraded_sources=[],
+                resolution_method=resolution_method,
+                resolved_coordinates=resolved_coords,
+                disambiguation_note=disambig_note,
+            )
             
             import cv2
             import numpy as np
@@ -178,13 +258,37 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
 
             if not resolved.location:
                 raise ValueError("Please include a location, for example: 'Explain the disaster in Wayanad'.")
-                
-            _emit(run, event_sink, "resolve", f"Resolving event near {resolved.location}")
-            event = resolve_event(resolved.location)
-            scout = ScoutResult(resolved.location, event.event_id, event.event_type, event.event_date or "unknown", event.description, sources=[event.source], degraded_sources=[])
+
             _emit(run, event_sink, "sources", "Resolving spatial coordinates and tiered image sources")
-            from .resolve.geocode import geocode
-            geo_info = geocode(scout.location)
+            geo_info = geocode(
+                resolved.location,
+                country_iso2=resolved.country_iso2,
+                admin_hint=resolved.admin_area,
+                country_hint=resolved.country,
+            )
+            resolved_coords = (
+                (float(geo_info["lat"]), float(geo_info["lon"]))
+                if geo_info and "lat" in geo_info and "lon" in geo_info
+                else None
+            )
+            disambig_note = geo_info.get("disambiguation_note") if geo_info else None
+            if disambig_note:
+                extra_caveats.append(disambig_note)
+
+            _emit(run, event_sink, "resolve", f"Resolving event near {resolved.location}")
+            event = _call_resolve_event(resolved, geo_info=geo_info)
+            scout = ScoutResult(
+                resolved.location,
+                event.event_id,
+                event.event_type,
+                event.event_date or "unknown",
+                event.description,
+                sources=[event.source],
+                degraded_sources=[],
+                resolution_method=resolved.resolution_method,
+                resolved_coordinates=resolved_coords,
+                disambiguation_note=disambig_note,
+            )
             
             downloader = ImageDownloaderTool()
             
