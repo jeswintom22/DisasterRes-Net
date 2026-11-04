@@ -14,6 +14,9 @@ class ScoutResult:
     sources: list[ProvenanceRef] = field(default_factory=list)
     rejected: list[dict[str, str]] = field(default_factory=list)
     degraded_sources: list[str] = field(default_factory=list)
+    resolution_method: str = "deterministic"
+    resolved_coordinates: tuple[float, float] | None = None
+    disambiguation_note: str | None = None
 
 @dataclass(frozen=True)
 class AnalysisResult:
@@ -44,7 +47,11 @@ class FactsBlock:
         found: set[str] = set()
         def visit(value: Any) -> None:
             if isinstance(value, (int, float)) and not isinstance(value, bool):
-                found.add(str(value)); found.add(f"{float(value):.1f}"); found.add(f"{float(value):.2f}")
+                found.add(str(value))
+                found.add(f"{float(value):.0f}")
+                found.add(f"{float(value):.1f}")
+                found.add(f"{float(value):.2f}")
+                found.add(f"{float(value):.4f}")
             elif isinstance(value, dict):
                 for item in value.values(): visit(item)
             elif isinstance(value, (list, tuple)): 
