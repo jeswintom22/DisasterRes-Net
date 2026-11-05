@@ -181,6 +181,7 @@ _COUNTRY_ISO2_MAP: dict[str, tuple[str, str]] = {
 }
 
 _ACTION_AND_STOP_WORDS = {
+    "go", "yes", "ok", "do", "it", "proceed",
     "assess", "assessment", "analyze", "analyse", "analysis", "check",
     "evaluate", "evaluation", "explain", "show", "report", "find",
     "get", "summarize", "summary", "tell", "me", "about", "the", "a", "an",

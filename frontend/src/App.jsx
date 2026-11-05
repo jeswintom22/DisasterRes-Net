@@ -238,11 +238,12 @@ export default function App() {
     // Check if the user is replying to a pending year clarification prompt
     let finalQuery = query;
     if (pendingQueryWithoutYear && !base64) {
-      const yearMatch = query.match(/\b(19\d{2}|20\d{2})\b/);
+      const cleanedFollowUp = query.replace(/^(?:go|yes|do it|check|ok|proceed)\s+/i, '').trim();
+      const yearMatch = cleanedFollowUp.match(/\b(19\d{2}|20\d{2})\b/);
       if (yearMatch) {
-        finalQuery = `${pendingQueryWithoutYear} in ${yearMatch[1]}`;
-      } else if (!/^(cancel|nevermind|no|skip)$/i.test(query)) {
-        finalQuery = `${pendingQueryWithoutYear} ${query}`;
+        finalQuery = `${pendingQueryWithoutYear} in ${cleanedFollowUp}`;
+      } else if (!/^(cancel|nevermind|no|skip)$/i.test(cleanedFollowUp)) {
+        finalQuery = `${pendingQueryWithoutYear} in ${cleanedFollowUp}`;
       } else {
         finalQuery = pendingQueryWithoutYear;
       }

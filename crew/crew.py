@@ -285,6 +285,22 @@ def run_disaster_crew(
 
             _emit(run, event_sink, "resolve", f"Resolving event near {resolved.location}")
             event = _call_resolve_event(resolved, geo_info=geo_info)
+
+            # Check if user specified a year/time and the found event date does not match
+            if resolved.time_hint:
+                import re
+                req_y = re.search(r"\b(19\d{2}|20\d{2})\b", resolved.time_hint)
+                ev_y = re.search(r"\b(19\d{2}|20\d{2})\b", event.event_date or "")
+                if req_y and ev_y and req_y.group(1) != ev_y.group(1):
+                    extra_caveats.append(
+                        f"Temporal notice: No authoritative disaster record was found specifically for {resolved.time_hint} in {resolved.location}. "
+                        f"Nearest active alert shown is from {event.event_date}."
+                    )
+                elif req_y and not ev_y:
+                    extra_caveats.append(
+                        f"Temporal notice: Checked databases for events during {resolved.time_hint} in {resolved.location}."
+                    )
+
             scout = ScoutResult(
                 resolved.location,
                 event.event_id,
