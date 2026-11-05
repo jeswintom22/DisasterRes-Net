@@ -105,6 +105,7 @@ def run_disaster_crew(
     event_sink: Callable[[dict[str, Any]], None] | None = None,
     return_payload: bool = False,
     satellite_mode: bool = False,
+    context: dict[str, Any] | None = None,
 ):
     _load_local_env()
     normalized = "v3:" + " ".join(query.lower().split())
@@ -112,6 +113,10 @@ def run_disaster_crew(
         normalized += ":upload"
     if satellite_mode:
         normalized += ":sat"
+    if context and isinstance(context, dict) and context.get("location"):
+        normalized += f":ctx:{context.get('location').lower()}"
+        if context.get("time"):
+            normalized += f":{str(context.get('time')).lower()}"
     cached = cache_get(normalized)
     if cached:
         if event_sink:
@@ -262,13 +267,13 @@ def run_disaster_crew(
                     "gradcam overlay": _to_b64(saliency_overlay)
                 }
         else:
-            resolved = resolve_query(query)
+            resolved = resolve_query(query, context=context)
             if resolved.intent == "smalltalk":
                 return {"response": "Hi! I'm the Disaster Intelligence agent. I can analyze recent disasters using spatial and news imagery. Try asking me about 'Wayanad'.", "run_id": run.run_id}
                 
-            if resolved.intent == "followup":
-                _emit(run, event_sink, "resolve", "Handling follow-up query based on prior context.")
-                return {"response": "This is a follow-up response. (Context retrieval not fully implemented yet.)", "run_id": run.run_id}
+            if resolved.intent == "followup" and not context:
+                _emit(run, event_sink, "resolve", "Handling follow-up query.")
+                return {"response": "This is a follow-up response. Could you please specify which location you'd like me to investigate?", "run_id": run.run_id}
 
             if not resolved.location:
                 raise ValueError("Please include a location, for example: 'Explain the disaster in Wayanad'.")
@@ -379,7 +384,29 @@ def run_disaster_crew(
             )
             response += images_md
 
-        payload = {"response": response, "query": query, "run_id": run.run_id, "narration": narration_mode, "facts": {"images_analysed": analysis_result.images_analysed, "images_rejected": analysis_result.images_rejected, "confidence_band": analysis_result.confidence_band, "visualizations": getattr(run, "visualizations", None)}, "events": run.events}
+        time_hint_val = getattr(resolved, "time_hint", None) if "resolved" in locals() and resolved else None
+        payload = {
+            "response": response,
+            "query": query,
+            "run_id": run.run_id,
+            "narration": narration_mode,
+            "facts": {
+                "location": scout.location,
+                "event_type": scout.event_type,
+                "event_date": scout.event_date,
+                "time_hint": time_hint_val,
+                "images_analysed": analysis_result.images_analysed,
+                "images_rejected": analysis_result.images_rejected,
+                "confidence_band": analysis_result.confidence_band,
+                "visualizations": getattr(run, "visualizations", None),
+            },
+            "context": {
+                "location": scout.location,
+                "hazard": scout.event_type,
+                "time": time_hint_val or scout.event_date,
+            },
+            "events": run.events,
+        }
         cache_set(normalized, payload)
         write_trace(run, "complete")
         return payload if return_payload else response

@@ -64,6 +64,7 @@ CRITICAL RULES:
 3. Strip action verbs ("Assess", "Check", "Show", "Analyze", "Evaluate", "Explain") and disaster nouns ("flood", "damage", "aftermath", "disaster") from place names.
 4. Correct misspelled place names to their standard English exonym and infer unambiguous administrative regions and countries (e.g., "wayand" -> locality: "Wayanad", admin_area: "Kerala", country: "India", country_iso2: "in", canonical_query: "Wayanad, Kerala, India").
 5. If the query asks a general conceptual or technical question with no real-world geographic place (e.g., "What is Mahalanobis distance?", "Explain Grad-CAM"), set locality, admin_area, country, country_iso2, and canonical_query to null and confidence to 0.0.
+6. If <prior_conversation_context> tags are present and the user's query is a conversational follow-up (e.g., 'what about in the month of july', 'how about 2024', 'what about wildfires', 'in month of 2026') that does not specify a new location, retain the location and hazard from prior context and apply the newly requested modification (e.g. merge 'July' with prior '2026' into 'July 2026'). If a new location is explicitly mentioned, prioritize the new location.
 """
 
 _INJECTION_PATTERNS = re.compile(
@@ -168,15 +169,32 @@ def validate_ai_extraction(raw_payload: dict[str, Any]) -> dict[str, Any] | None
 def extract_query_entities(
     query: str,
     *,
+    context: dict[str, Any] | None = None,
     offline: bool = False,
     timeout_s: float = 3.0,
 ) -> dict[str, Any] | None:
-    """Extract structured geographic and hazard entities using LLM_MODEL_SMALL with L1 cache."""
+    """Extract structured geographic and hazard entities using LLM_MODEL_SMALL with L1 cache and conversational context."""
     cleaned = " ".join(query.strip().split())
     if not cleaned:
         return None
 
-    digest = hashlib.sha256(cleaned.lower().encode("utf-8")).hexdigest()[:32]
+    # Format optional prior context
+    context_str = ""
+    if context and isinstance(context, dict):
+        loc = context.get("location") or context.get("canonical_query")
+        haz = context.get("hazard") or context.get("hazard_hint")
+        tim = context.get("time") or context.get("time_hint")
+        parts = []
+        if loc:
+            parts.append(f"Location: {loc}")
+        if haz:
+            parts.append(f"Hazard: {haz}")
+        if tim:
+            parts.append(f"Time: {tim}")
+        if parts:
+            context_str = "<prior_conversation_context>\n" + "\n".join(parts) + "\n</prior_conversation_context>\n"
+
+    digest = hashlib.sha256(f"{context_str.lower()}{cleaned.lower()}".encode("utf-8")).hexdigest()[:32]
     cache_key = f"ai_query_resolve_v1:{digest}"
     cached = cache_get(cache_key)
     if isinstance(cached, dict):
@@ -193,7 +211,7 @@ def extract_query_entities(
     model = os.getenv("LLM_MODEL_SMALL", "gpt-4o-mini").strip() or "gpt-4o-mini"
     # Escape closing tags inside untrusted input so user text cannot break out of sandbox tags
     safe_inner = cleaned.replace("</untrusted_user_query>", "").replace("<untrusted_user_query>", "")
-    user_message = f"<untrusted_user_query>\n{safe_inner}\n</untrusted_user_query>"
+    user_message = f"{context_str}<untrusted_user_query>\n{safe_inner}\n</untrusted_user_query>"
 
     try:
         response = httpx.post(

@@ -170,6 +170,7 @@ export default function App() {
   const [activeDock, setActiveDock] = useState('chat');
   const [start, setStart] = useState({ x: 24, y: 120 });
   const [pendingQueryWithoutYear, setPendingQueryWithoutYear] = useState(null);
+  const [conversationContext, setConversationContext] = useState(null);
 
   const placeholder = useRef(null);
   const endRef = useRef(null);
@@ -245,24 +246,34 @@ export default function App() {
     const imagesArray = Array.isArray(imageUrls) ? imageUrls : (imageUrls ? [imageUrls] : []);
     const isSatelliteMode = activeDock === 'sweep' || activeModes.includes('search');
 
+    // Determine if query is a conversational follow-up to ongoing topic
+    const hasPriorContext = Boolean(conversationContext && conversationContext.location);
+    const isExplicitFollowUp = hasPriorContext && (
+      /^(?:what about|how about|what was|tell me|show me|check|what\b|how\b|why\b|where\b|when\b|is there|was there|in\b|during\b|month\b|year\b|and\b)/i.test(query) ||
+      /\b(january|february|march|april|may|june|july|august|september|october|november|december|current|recent|today|yesterday|earlier|before|after)\b/i.test(query) ||
+      /^\s*(?:in\s+)?(?:the\s+)?(?:month|year)\s+of\s+/i.test(query) ||
+      /^\s*(?:19\d{2}|20\d{2})\b/.test(query) ||
+      query.split(/\s+/).length <= 4
+    );
+
     // Check if the user is replying to a pending year clarification prompt
     let finalQuery = query;
     if (pendingQueryWithoutYear && !base64) {
-      const cleanedFollowUp = query.replace(/^(?:go|yes|do it|check|ok|proceed)\s+/i, '').trim();
-      const yearMatch = cleanedFollowUp.match(/\b(19\d{2}|20\d{2})\b/);
-      if (yearMatch) {
-        finalQuery = `${pendingQueryWithoutYear} in ${cleanedFollowUp}`;
-      } else if (!/^(cancel|nevermind|no|skip)$/i.test(cleanedFollowUp)) {
-        finalQuery = `${pendingQueryWithoutYear} in ${cleanedFollowUp}`;
+      const cleanedFollowUp = query.replace(/^(?:go|yes|do it|check|ok|proceed|in the month of|in month of|in the year of|in year of|in year|in)\s+/i, '').trim();
+      if (!/^(cancel|nevermind|no|skip)$/i.test(cleanedFollowUp)) {
+        finalQuery = `${pendingQueryWithoutYear} in ${cleanedFollowUp || query}`;
       } else {
         finalQuery = pendingQueryWithoutYear;
       }
       setPendingQueryWithoutYear(null);
-    } else if (!base64 && query && !/\b(19\d{2}|20\d{2})\b/.test(query)) {
-      // Check if this looks like a disaster location query without a year specified
-      const hasLocationKeywords = /\b(in|at|near|around|damage|flood|landslide|earthquake|wildfire|cyclone|hurricane|disaster)\b/i.test(query);
+    } else if (!base64 && query && !isExplicitFollowUp) {
+      // Check if this looks like a brand new disaster location query without a year/time specified
+      const hasDisasterWord = /\b(flood|flooding|landslide|mudslide|earthquake|wildfire|cyclone|hurricane|storm|disaster|damage|rubble)\b/i.test(query);
+      const hasTimeReference = /\b(19\d{2}|20\d{2}|january|february|march|april|may|june|july|august|september|october|november|december|current|recent|today|yesterday|latest|now)\b/i.test(query);
       const isNotSmalltalk = !/\b(hi|hello|hey|help|who are you|thanks)\b/i.test(query);
-      if (hasLocationKeywords && isNotSmalltalk) {
+
+      // Only prompt for year if it is a new disaster inquiry lacking a temporal anchor
+      if (hasDisasterWord && !hasTimeReference && isNotSmalltalk) {
         setMessages((m) => [
           ...m,
           { role: 'user', content: query, images: imagesArray },
@@ -282,7 +293,11 @@ export default function App() {
     setStage({ label: 'Working', state: 'working', variant: 'gyro', detail: 'starting investigation' });
     toBottom();
 
-    let payload = { query: finalQuery, satellite_mode: isSatelliteMode };
+    let payload = {
+      query: finalQuery,
+      satellite_mode: isSatelliteMode,
+      context: isExplicitFollowUp ? conversationContext : null,
+    };
     if (base64) payload.image = base64;
     const fail = (text) => {
       setStage(null);
@@ -306,6 +321,15 @@ export default function App() {
           source.close();
           setStage(null);
           const r = item.result || {};
+          if (r.context && r.context.location) {
+            setConversationContext(r.context);
+          } else if (r.facts && r.facts.location) {
+            setConversationContext({
+              location: r.facts.location,
+              hazard: r.facts.event_type,
+              time: r.facts.time_hint || r.facts.event_date,
+            });
+          }
           setMessages((m) => [...m, { role: 'ai', stream: true, content: r.response || '', facts: r.facts, meta: { narration: r.narration }, result_image: imagesArray }]);
           toBottom();
         } else if (item.stage === 'error') {

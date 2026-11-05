@@ -441,10 +441,11 @@ def _enrich_with_gazetteer(extracted: dict[str, Any]) -> dict[str, Any]:
 def resolve_query(
     query: str,
     *,
+    context: dict[str, Any] | None = None,
     offline: bool | None = None,
     use_ai: bool = True,
 ) -> ResolvedQuery:
-    """Resolve a free-text disaster query into a structured ResolvedQuery."""
+    """Resolve a free-text disaster query into a structured ResolvedQuery with optional conversational context."""
     raw = query or ""
     cleaned = " ".join(raw.strip().split())
     if not cleaned:
@@ -465,7 +466,7 @@ def resolve_query(
             cleaned=cleaned,
             resolution_method="none",
         )
-    if any(w in cleaned.lower() for w in ["remind", "followup", "again", "what was"]):
+    if any(w in cleaned.lower() for w in ["remind", "followup", "again", "what was"]) and not context:
         return ResolvedQuery(
             intent="followup",
             location=None,
@@ -490,17 +491,42 @@ def resolve_query(
 
     ai_result: dict[str, Any] | None = None
     if use_ai and not is_offline:
-        ai_result = extract_query_entities(cleaned, offline=is_offline)
+        ai_result = extract_query_entities(cleaned, context=context, offline=is_offline)
 
     if ai_result is not None:
         enriched = _enrich_with_gazetteer(ai_result)
         det_fallback = _deterministic_extract_toponym(cleaned)
         canonical = enriched.get("canonical_query") or enriched.get("locality") or enriched.get("country")
+        
+        # If AI didn't find location but context has one, inherit location from context
+        if not canonical and context and isinstance(context, dict) and context.get("location"):
+            canonical = context.get("location")
+            enriched["country"] = enriched.get("country") or context.get("country")
+            enriched["country_iso2"] = enriched.get("country_iso2") or context.get("country_iso2")
+            enriched["locality"] = enriched.get("locality") or context.get("locality")
+            enriched["admin_area"] = enriched.get("admin_area") or context.get("admin_area")
+
+        # Merge time hints (e.g. query "July" + context "2026" -> "July 2026")
+        time_hint = enriched.get("time_hint") or det_fallback.get("time_hint")
+        if context and isinstance(context, dict) and context.get("time"):
+            ctx_time = str(context.get("time")).strip()
+            if time_hint and ctx_time and time_hint.lower() != ctx_time.lower():
+                has_year_th = bool(re.search(r"\b(19\d{2}|20\d{2})\b", time_hint))
+                has_year_ctx = bool(re.search(r"\b(19\d{2}|20\d{2})\b", ctx_time))
+                if not has_year_th and has_year_ctx:
+                    time_hint = f"{time_hint} {re.search(r'\b(19\d{2}|20\d{2})\b', ctx_time).group(1)}"
+            elif not time_hint:
+                time_hint = ctx_time
+
+        hazard_hint = enriched.get("hazard_hint") or det_fallback.get("hazard_hint")
+        if not hazard_hint and context and isinstance(context, dict):
+            hazard_hint = context.get("hazard") or context.get("hazard_hint")
+
         return ResolvedQuery(
             intent="investigate",
             location=canonical,
-            time_hint=enriched.get("time_hint") or det_fallback.get("time_hint"),
-            hazard_hint=enriched.get("hazard_hint") or det_fallback.get("hazard_hint"),
+            time_hint=time_hint,
+            hazard_hint=hazard_hint,
             locality=enriched.get("locality"),
             admin_area=enriched.get("admin_area"),
             country=enriched.get("country"),
@@ -513,18 +539,46 @@ def resolve_query(
         )
 
     det = _deterministic_extract_toponym(cleaned)
+    canonical = det["canonical_query"]
+    time_hint = det["time_hint"]
+    hazard_hint = det["hazard_hint"]
+    method = det["resolution_method"]
+    confidence = float(det["confidence"])
+
+    # If deterministic fallback found no location but context exists, inherit context
+    if (not canonical or confidence == 0.0) and context and isinstance(context, dict) and context.get("location"):
+        canonical = context.get("location")
+        det["country"] = det.get("country") or context.get("country")
+        det["country_iso2"] = det.get("country_iso2") or context.get("country_iso2")
+        det["locality"] = det.get("locality") or context.get("locality")
+        det["admin_area"] = det.get("admin_area") or context.get("admin_area")
+        method = "context_fallback"
+        confidence = 0.85
+
+    if context and isinstance(context, dict):
+        if not hazard_hint:
+            hazard_hint = context.get("hazard") or context.get("hazard_hint")
+        ctx_time = str(context.get("time", "")).strip()
+        if time_hint and ctx_time and time_hint.lower() != ctx_time.lower():
+            has_year_th = bool(re.search(r"\b(19\d{2}|20\d{2})\b", time_hint))
+            has_year_ctx = bool(re.search(r"\b(19\d{2}|20\d{2})\b", ctx_time))
+            if not has_year_th and has_year_ctx:
+                time_hint = f"{time_hint} {re.search(r'\b(19\d{2}|20\d{2})\b', ctx_time).group(1)}"
+        elif not time_hint and ctx_time:
+            time_hint = ctx_time
+
     return ResolvedQuery(
         intent="investigate",
-        location=det["canonical_query"],
-        time_hint=det["time_hint"],
-        hazard_hint=det["hazard_hint"],
+        location=canonical,
+        time_hint=time_hint,
+        hazard_hint=hazard_hint,
         locality=det["locality"],
         admin_area=det["admin_area"],
         country=det["country"],
         country_iso2=det["country_iso2"],
-        canonical_query=det["canonical_query"],
-        confidence=float(det["confidence"]),
-        resolution_method=det["resolution_method"],
+        canonical_query=canonical,
+        confidence=confidence,
+        resolution_method=method,
         raw=raw,
         cleaned=cleaned,
     )
