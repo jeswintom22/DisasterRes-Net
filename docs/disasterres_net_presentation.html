@@ -1,0 +1,1194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DisasterRes — Presentation Deck</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  
+  <!-- Google Fonts: Bricolage Grotesque, Instrument Serif, Spline Sans Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;500;600;700;800;900&family=Instrument+Serif:ital@0;1&family=Spline+Sans+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- KaTeX for Mathematical Expressions -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js" onload="renderMathInElement(document.body, {delimiters: [{left: '$$', right: '$$', display: true}, {left: '$', right: '$', display: false}]});"></script>
+  
+  <style>
+    :root {
+      --bg-space: #070605;
+      --bg-basalt: #0d0b09;
+      --bg-card: rgba(18, 15, 13, 0.75);
+      --bg-card-hover: rgba(26, 22, 19, 0.85);
+      --text-bone: #efe8db;
+      --text-ash: #9c9284;
+      --text-muted: #6b6357;
+      --accent-ember: #ff5a1f;
+      --accent-ember-soft: #ff8547;
+      --accent-verdigris: #4fd1b0;
+      --accent-gold: #f6b84b;
+      --border-light: rgba(239, 232, 219, 0.08);
+      --border-accent: rgba(255, 90, 31, 0.3);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-space);
+      color: var(--text-bone);
+      font-family: 'Bricolage Grotesque', -apple-system, sans-serif;
+      overflow: hidden;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    .font-serif { font-family: 'Instrument Serif', Georgia, serif; }
+    .font-mono { font-family: 'Spline Sans Mono', monospace; }
+
+    /* Cinematic Atmospheric Lighting */
+    .atmosphere {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      background:
+        radial-gradient(1200px 700px at 80% -10%, rgba(255, 90, 31, 0.15), transparent 70%),
+        radial-gradient(900px 600px at -10% 110%, rgba(79, 209, 176, 0.08), transparent 65%),
+        radial-gradient(800px 500px at 50% 50%, rgba(246, 184, 75, 0.03), transparent 70%);
+    }
+
+    .topo-grid {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 1;
+      opacity: 0.15;
+      background-image: 
+        linear-gradient(to right, rgba(239, 232, 219, 0.06) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(239, 232, 219, 0.06) 1px, transparent 1px);
+      background-size: 50px 50px;
+    }
+
+    /* Presentation Slide Mechanics */
+    .deck-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      z-index: 10;
+    }
+
+    .slide {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: scale(0.98) translateY(12px);
+      transition: opacity 0.4s cubic-bezier(0.16, 1, 0.3, 1), 
+                  transform 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+                  visibility 0.4s;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 3.5rem 6vw 4.5rem;
+      box-sizing: border-box;
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+
+    .slide.active {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: scale(1) translateY(0);
+      z-index: 20;
+    }
+
+    /* Slide Cards & Typography */
+    .slide-card {
+      background: var(--bg-card);
+      backdrop-filter: blur(14px);
+      border: 1px solid var(--border-light);
+      border-radius: 1rem;
+      transition: border-color 0.25s, transform 0.25s;
+    }
+    .slide-card:hover {
+      border-color: rgba(239, 232, 219, 0.18);
+    }
+    .slide-card-accent {
+      background: rgba(26, 20, 16, 0.85);
+      backdrop-filter: blur(14px);
+      border: 1px solid var(--border-accent);
+      border-radius: 1rem;
+      box-shadow: 0 10px 40px -15px rgba(255, 90, 31, 0.18);
+    }
+
+    /* Subtle Floating Minimalist Controller */
+    .controls-dock {
+      position: fixed;
+      bottom: 1.75rem;
+      right: 2.25rem;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: rgba(13, 11, 9, 0.8);
+      backdrop-filter: blur(16px);
+      padding: 0.4rem 0.8rem;
+      border-radius: 9999px;
+      border: 1px solid var(--border-light);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+    }
+
+    .btn-nav {
+      background: transparent;
+      border: none;
+      color: var(--text-ash);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      transition: color 0.2s, background 0.2s;
+    }
+    .btn-nav:hover {
+      color: var(--text-bone);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    /* Slide Number Watermark / Indicator */
+    .slide-tag {
+      position: fixed;
+      bottom: 2rem;
+      left: 2.5rem;
+      z-index: 40;
+      font-family: 'Spline Sans Mono', monospace;
+      font-size: 0.8rem;
+      letter-spacing: 0.15em;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+    .slide-tag span.active-num {
+      color: var(--text-bone);
+      font-weight: 700;
+    }
+
+    /* Print Setup */
+    @media print {
+      body {
+        overflow: visible !important;
+        background: #000000 !important;
+      }
+      .deck-container {
+        height: auto !important;
+        overflow: visible !important;
+      }
+      .slide {
+        position: relative !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        transform: none !important;
+        page-break-after: always !important;
+        height: 100vh !important;
+        padding: 3rem !important;
+      }
+      .controls-dock, .slide-tag, #gridModal {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Atmosphere & Grid -->
+  <div class="atmosphere"></div>
+  <div class="topo-grid"></div>
+
+  <!-- MAIN SLIDES DECK -->
+  <main class="deck-container">
+
+    <!-- ================= SLIDE 1: Title Slide ================= -->
+    <section class="slide active" data-slide="1" data-title="DisasterRes — Title">
+      <div class="max-w-5xl">
+        <!-- Technical Label -->
+        <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-ember/10 border border-ember/30 text-ember-soft font-mono text-xs mb-8 tracking-wider">
+          <span class="w-1.5 h-1.5 rounded-full bg-ember animate-pulse"></span>
+          <span>MULTIMODAL CRISIS PERCEPTION &amp; AUTONOMOUS DAMAGE ASSESSMENT</span>
+        </div>
+        
+        <!-- Main Title: DISASTER RES -->
+        <h1 class="text-7xl sm:text-8xl lg:text-9xl font-black tracking-[-0.05em] text-bone leading-[0.88] mb-6">
+          Disaster<span class="text-ember">Res</span>
+        </h1>
+        
+        <p class="font-serif italic text-2xl sm:text-4xl text-ember-soft font-normal mb-6">
+          Multi-modal vision networks, early feature fusion, and autonomous incident consensus.
+        </p>
+
+        <p class="text-base sm:text-lg text-ash max-w-2xl leading-relaxed mb-12">
+          From satellite orbit and aerial feeds to calibrated damage metrics in minutes. Fusing dual-stream Inception-ResNet-V2, neuro-inspired saliency, and handcrafted texture mathematics for life-critical disaster triage.
+        </p>
+
+        <!-- 3 Architecture Pillars -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-5 max-w-4xl font-mono">
+          <div class="slide-card p-5 border-l-2 border-l-ember">
+            <span class="text-[11px] uppercase tracking-widest text-muted block mb-1">Feature Space</span>
+            <div class="text-3xl font-extrabold text-bone">2,036-D</div>
+            <span class="text-xs text-ash mt-1 block">Dual CNN + GLCM + LBP</span>
+          </div>
+          <div class="slide-card p-5 border-l-2 border-l-verdigris">
+            <span class="text-[11px] uppercase tracking-widest text-muted block mb-1">Agent Architecture</span>
+            <div class="text-3xl font-extrabold text-verdigris">CrewAI Desk</div>
+            <span class="text-xs text-ash mt-1 block">Scout · Analyst · Commander</span>
+          </div>
+          <div class="slide-card p-5 border-l-2 border-l-gold">
+            <span class="text-[11px] uppercase tracking-widest text-muted block mb-1">Standardized Scale</span>
+            <div class="text-3xl font-extrabold text-gold">DEM 0–100</div>
+            <span class="text-xs text-ash mt-1 block">Continuous Damage Metric</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SLIDE 2: Problem Statement ================= -->
+    <section class="slide" data-slide="2" data-title="The Crisis Triage Dilemma">
+      <div class="max-w-5xl">
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">02 · The Crisis Triage Dilemma</span>
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-8">
+          The Information Bottleneck in Emergency Operations
+        </h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div class="slide-card p-6 border-t-2 border-t-red-500">
+            <span class="font-mono text-xs text-red-400 font-bold uppercase block mb-3">Skew &gt; 90:1</span>
+            <h3 class="text-xl font-bold text-bone mb-2">Minority Hazard Blindness</h3>
+            <p class="text-xs sm:text-sm text-ash leading-relaxed">
+              Social imagery is dominated by non-disaster posts and frequent hurricanes. Critical rare perils like landslides (490 scenes) and floods (1,303) are silenced, yielding an unacceptable 2.08% baseline flood recall.
+            </p>
+          </div>
+
+          <div class="slide-card p-6 border-t-2 border-t-ember">
+            <span class="font-mono text-xs text-ember font-bold uppercase block mb-3">ECE &gt; 14%</span>
+            <h3 class="text-xl font-bold text-bone mb-2">Uncalibrated Overconfidence</h3>
+            <p class="text-xs sm:text-sm text-ash leading-relaxed">
+              Standard deep neural networks output high confidence (90%+) on incorrect or ambiguous scenes. Classifiers lack temperature scaling, giving emergency dispatchers false certainty on blurry boundaries.
+            </p>
+          </div>
+
+          <div class="slide-card p-6 border-t-2 border-t-gold">
+            <span class="font-mono text-xs text-gold font-bold uppercase block mb-3">Zero Localization</span>
+            <h3 class="text-xl font-bold text-bone mb-2">Spatial Blindness</h3>
+            <p class="text-xs sm:text-sm text-ash leading-relaxed">
+              Image-level labels fail to specify where damage is located. First responders need exact polygon boundaries, affected area footprints, and contiguous rubble centroids to route tactical rescue gear.
+            </p>
+          </div>
+        </div>
+
+        <div class="mt-8 p-4 rounded-xl bg-basalt border border-bone/10 flex items-center justify-between font-mono text-xs">
+          <span class="text-bone"><strong class="text-ember">CORE PRINCIPLE:</strong> In life-critical disaster management, an erroneous forced classification is significantly more costly than an explicit abstention.</span>
+          <span class="text-muted hidden sm:inline">Gupta &amp; Roy (2024, 2025)</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SLIDE 3: Dataset & Hygiene Pipeline ================= -->
+    <section class="slide" data-slide="3" data-title="Dataset Hygiene &amp; Deduplication">
+      <div class="max-w-5xl">
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">03 · Data Engineering &amp; Hygiene</span>
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
+          39,412 Crisis Scenes &amp; Zero-Leakage Hygiene
+        </h2>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+          <!-- Left: Corpus Partition -->
+          <div class="lg:col-span-5 slide-card p-6 flex flex-col justify-between font-mono text-xs">
+            <div>
+              <span class="text-ember uppercase font-bold tracking-wider block mb-2">Stratified 70:30 Partition</span>
+              <h3 class="text-lg font-bold text-bone font-sans mb-4">CrisisMMD &amp; Multi-Hazard Web Stream</h3>
+              <div class="space-y-2">
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Non-Disaster Baseline:</span>
+                  <span class="text-bone font-bold">21,563 (6,471 test)</span>
+                </div>
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Hurricane / Cyclone:</span>
+                  <span class="text-bone font-bold">13,323 (3,997 test)</span>
+                </div>
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Wildfire Burn Scars:</span>
+                  <span class="text-ember font-bold">1,460 (438 test)</span>
+                </div>
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Flood Inundation:</span>
+                  <span class="text-verdigris font-bold">1,303 (391 test)</span>
+                </div>
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Earthquake Debris:</span>
+                  <span class="text-gold font-bold">1,273 (382 test)</span>
+                </div>
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Landslide / Mudflow:</span>
+                  <span class="text-red-400 font-bold">490 (147 test)</span>
+                </div>
+              </div>
+            </div>
+            <div class="mt-4 pt-3 border-t border-bone/10 text-[11px] text-muted flex justify-between">
+              <span>Total: 39,412 scenes</span>
+              <span>Train: 27,586 | Test: 11,826</span>
+            </div>
+          </div>
+
+          <!-- Right: 3 Data Protections -->
+          <div class="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div class="slide-card p-5">
+              <span class="font-mono text-xs text-ember font-bold block mb-2">SHIELD 01</span>
+              <h4 class="font-bold text-bone text-base mb-1">64-Bit dHash Deduplication</h4>
+              <p class="text-xs text-ash leading-relaxed">
+                Social reposts share scene angles. Grayscale 8×9 horizontal gradients generate a 64-bit binary hash. Cross-split pairs with Hamming distance ≤ 4 are purged, preventing visual memorization.
+              </p>
+            </div>
+
+            <div class="slide-card p-5">
+              <span class="font-mono text-xs text-verdigris font-bold block mb-2">SHIELD 02</span>
+              <h4 class="font-bold text-bone text-base mb-1">Blank Banner &amp; Quality Guard</h4>
+              <p class="text-xs text-ash leading-relaxed">
+                Scraped images often include solid-color banners or corrupt headers. An automated filter evaluates RGB standard deviation $\sigma_{\text{rgb}}$; images with $\sigma &lt; 2.0$ are quarantined before GPU passes.
+              </p>
+            </div>
+
+            <div class="slide-card p-5">
+              <span class="font-mono text-xs text-gold font-bold block mb-2">SHIELD 03</span>
+              <h4 class="font-bold text-bone text-base mb-1">Bicubic Standardization</h4>
+              <p class="text-xs text-ash leading-relaxed">
+                Images are standardized to $299 \times 299 \times 3$ with bicubic interpolation, fitting Inception-ResNet-V2 receptive fields. Pixel values are mapped to $[0, 1]$ prior to LMS opponent processing.
+              </p>
+            </div>
+
+            <div class="slide-card p-5">
+              <span class="font-mono text-xs text-violet-400 font-bold block mb-2">SHIELD 04</span>
+              <h4 class="font-bold text-bone text-base mb-1">Zero-Leakage Normalization</h4>
+              <p class="text-xs text-ash leading-relaxed">
+                `StandardScaler` parameters ($\boldsymbol{\mu}, \boldsymbol{\sigma}$) are fitted strictly within training folds during cross-validation, guaranteeing zero leakage of test distributions.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SLIDE 4: Dual-Engine Architecture ================= -->
+    <section class="slide" data-slide="4" data-title="Dual-Engine Architecture">
+      <div class="max-w-5xl">
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">04 · System Blueprint</span>
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-8">
+          Two Cores, One Unified Intelligence Desk
+        </h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 items-stretch">
+          <!-- Engine A -->
+          <div class="slide-card-accent p-7 flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between mb-4 font-mono text-xs">
+                <span class="px-2.5 py-1 rounded bg-ember/20 text-ember font-bold">ENGINE A</span>
+                <span class="text-ash uppercase">Deterministic Vision Core</span>
+              </div>
+              <h3 class="text-2xl font-bold text-bone mb-4 font-sans">Hybrid Multimodal Pipeline (2,036-D)</h3>
+              <ul class="space-y-3 font-mono text-xs text-ash">
+                <li class="flex items-start gap-2.5">
+                  <span class="text-ember font-bold">▹</span>
+                  <span><strong class="text-bone">Neuro-Inspired LMS Saliency:</strong> Color opponent pyramids isolate high-frequency rubble anomalies.</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="text-ember font-bold">▹</span>
+                  <span><strong class="text-bone">Dual Inception-ResNet-V2:</strong> 1,000-D raw RGB + 1,000-D attention deep embeddings.</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="text-ember font-bold">▹</span>
+                  <span><strong class="text-bone">Texture Descriptors (GLCM + LBP):</strong> 36-D surface roughness, water sheen, and rubble moments.</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="text-ember font-bold">▹</span>
+                  <span><strong class="text-bone">Module M2 Spatial Localization:</strong> Otsu binarization, connected components, continuous DEM (0–100).</span>
+                </li>
+              </ul>
+            </div>
+            <div class="mt-6 pt-4 border-t border-bone/10 font-mono text-xs text-ember-soft flex justify-between">
+              <span>Output: Multi-Task Probs + DDM Mask</span>
+              <span class="text-bone">&lt; 380ms Latency</span>
+            </div>
+          </div>
+
+          <!-- Engine B -->
+          <div class="slide-card p-7 flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between mb-4 font-mono text-xs">
+                <span class="px-2.5 py-1 rounded bg-verdigris/20 text-verdigris font-bold">ENGINE B</span>
+                <span class="text-ash uppercase">Autonomous Agent Crew</span>
+              </div>
+              <h3 class="text-2xl font-bold text-bone mb-4 font-sans">CrewAI Multi-Agent Coordinator</h3>
+              <ul class="space-y-3 font-mono text-xs text-ash">
+                <li class="flex items-start gap-2.5">
+                  <span class="text-verdigris font-bold">▹</span>
+                  <span><strong class="text-bone">Intelligence Scout:</strong> Interrogates live GDACS feeds, ReliefWeb event archives, and geocoding.</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="text-verdigris font-bold">▹</span>
+                  <span><strong class="text-bone">Evidence Harvester:</strong> Multi-tiered web imagery scraper with dynamic query composition.</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="text-verdigris font-bold">▹</span>
+                  <span><strong class="text-bone">Incident Commander:</strong> Evaluates peril-severity matrices and compiles tactical emergency actions.</span>
+                </li>
+                <li class="flex items-start gap-2.5">
+                  <span class="text-verdigris font-bold">▹</span>
+                  <span><strong class="text-bone">Numeric Fidelity Gate:</strong> Deterministic regex validator auditing reports against ground-truth facts.</span>
+                </li>
+              </ul>
+            </div>
+            <div class="mt-6 pt-4 border-t border-bone/10 font-mono text-xs text-verdigris flex justify-between">
+              <span>Output: Calibrated Situation Report (SITREP)</span>
+              <span class="text-bone">SSE Streaming</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SLIDE 5: 2,036-D Early Feature Fusion Math ================= -->
+    <section class="slide" data-slide="5" data-title="2,036-D Feature Mathematics">
+      <div class="max-w-5xl">
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">05 · Multimodal Feature Engineering</span>
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
+          Early Feature Fusion: $\mathbf{x}_{\text{fused}} \in \mathbb{R}^{2036}$
+        </h2>
+
+        <!-- Stream Matrix Breakdown -->
+        <div class="slide-card p-6 mb-6">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center font-mono">
+            <div class="p-4 rounded-xl bg-basalt border border-bone/10">
+              <span class="text-ember font-bold text-xs uppercase block">Stream 1 · Deep Raw</span>
+              <div class="text-3xl font-extrabold text-bone my-1.5">1,000-D</div>
+              <p class="text-[11px] text-ash">Inception-ResNet-V2 Global Average Pooling ($\mathbf{df}_1$)</p>
+            </div>
+            <div class="p-4 rounded-xl bg-basalt border border-ember/30">
+              <span class="text-ember-soft font-bold text-xs uppercase block">Stream 2 · Saliency</span>
+              <div class="text-3xl font-extrabold text-bone my-1.5">1,000-D</div>
+              <p class="text-[11px] text-ash">LMS cone opponent attended visual stream ($\mathbf{df}_2$)</p>
+            </div>
+            <div class="p-4 rounded-xl bg-basalt border border-bone/10">
+              <span class="text-verdigris font-bold text-xs uppercase block">Stream 3 · GLCM Texture</span>
+              <div class="text-3xl font-extrabold text-verdigris my-1.5">20-D</div>
+              <p class="text-[11px] text-ash">4 angles × 5 Haralick matrices: contrast, energy, homogeneity</p>
+            </div>
+            <div class="p-4 rounded-xl bg-basalt border border-bone/10">
+              <span class="text-gold font-bold text-xs uppercase block">Stream 4 · LBP Moments</span>
+              <div class="text-3xl font-extrabold text-gold my-1.5">16-D</div>
+              <p class="text-[11px] text-ash">Uniform sub-bands: skewness, kurtosis, texture entropy</p>
+            </div>
+          </div>
+
+          <div class="mt-4 pt-4 border-t border-bone/10 text-center font-mono text-xs text-ash">
+            $$\mathbf{x}_{\text{fused}} = \left[\mathbf{df}_1 (1000) \;\parallel\; \mathbf{df}_2 (1000) \;\parallel\; \mathbf{hf} (20) \;\parallel\; \mathbf{lt} (16)\right] \in \mathbb{R}^{2036} \;\xrightarrow{\text{StandardScaler}}\; \text{Random Forest (300 Trees)}$$
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <div class="slide-card p-5">
+            <h4 class="font-bold text-bone text-sm flex items-center gap-2 mb-2 font-mono">
+              <span class="w-2 h-2 rounded-full bg-ember"></span>
+              Biological LMS Saliency Transformation
+            </h4>
+            <p class="text-xs text-ash leading-relaxed">
+              Transforms RGB into human cone response space: $RG = L - M$, $BY = S - (L + M)/2$, and Luminance $I = (L + M + S)/3$. Multi-scale center-surround pyramids isolate structural collapses that convolutional pooling often blends with vegetation.
+            </p>
+          </div>
+          <div class="slide-card p-5">
+            <h4 class="font-bold text-bone text-sm flex items-center gap-2 mb-2 font-mono">
+              <span class="w-2 h-2 rounded-full bg-verdigris"></span>
+              Why Hybrid Fusion Outperforms Pure CNNs (+6.8%)
+            </h4>
+            <p class="text-xs text-ash leading-relaxed">
+              Deep CNNs capture macro-geometry but smooth over fine surface granularity. GLCM energy isolates floodwater specular reflection, while LBP entropy captures shattered building rubble, boosting macro F1 by +6.8% over deep features alone.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SLIDE 6: Module M2 & DEM-100 Localization ================= -->
+    <section class="slide" data-slide="6" data-title="Module M2 &amp; DEM-100 Score">
+      <div class="max-w-5xl">
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">06 · Spatial Damage Quantification</span>
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
+          Module M2: Damage Localization &amp; Continuous DEM Score
+        </h2>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+          <div class="lg:col-span-7 space-y-3.5">
+            <div class="slide-card p-4 flex items-start gap-4">
+              <span class="w-8 h-8 rounded-lg bg-ember/20 text-ember font-mono text-sm flex items-center justify-center font-bold shrink-0">1</span>
+              <div>
+                <h4 class="text-sm font-bold text-bone font-sans">Activation Saliency &amp; GradCAM++ Extraction</h4>
+                <p class="text-xs text-ash mt-0.5 leading-relaxed">Generates gradient-weighted spatial activations highlighting damage zones without requiring manual polygon annotations.</p>
+              </div>
+            </div>
+
+            <div class="slide-card p-4 flex items-start gap-4">
+              <span class="w-8 h-8 rounded-lg bg-ember/20 text-ember font-mono text-sm flex items-center justify-center font-bold shrink-0">2</span>
+              <div>
+                <h4 class="text-sm font-bold text-bone font-sans">Adaptive Otsu &amp; Connected Component Filtering</h4>
+                <p class="text-xs text-ash mt-0.5 leading-relaxed">Peril-calibrated dynamic percentile thresholds (68% flood to 72% wildfire) segment contiguous damage clusters ($\alpha\text{-1}, \alpha\text{-2}\dots$).</p>
+              </div>
+            </div>
+
+            <div class="slide-card p-4 flex items-start gap-4">
+              <span class="w-8 h-8 rounded-lg bg-verdigris/20 text-verdigris font-mono text-sm flex items-center justify-center font-bold shrink-0">3</span>
+              <div>
+                <h4 class="text-sm font-bold text-bone font-sans">Continuous Damage Evaluation Metric (DEM $\in [0, 100]$)</h4>
+                <p class="text-xs text-ash mt-0.5 leading-relaxed">$$\text{DEM} = \left[w_a A_{\text{affected}} + w_d D_{\text{density}} + w_e H_{\text{entropy}} + w_c C_{\text{classifier}}\right] \times \text{HazardMultiplier}$$</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Severity Index Summary -->
+          <div class="lg:col-span-5 slide-card-accent p-6 flex flex-col justify-between font-mono">
+            <div>
+              <span class="text-xs text-ember font-bold uppercase tracking-wider block mb-3">DEM-100 Operational Tiers</span>
+              
+              <div class="space-y-3 text-xs">
+                <div class="p-3 rounded-lg bg-basalt flex items-center justify-between border border-verdigris/20">
+                  <div>
+                    <span class="text-verdigris font-bold block">0.0 – 25.0</span>
+                    <span class="text-ash text-[11px]">Minimal Impact</span>
+                  </div>
+                  <span class="text-[10px] text-muted">Superficial</span>
+                </div>
+                
+                <div class="p-3 rounded-lg bg-basalt flex items-center justify-between border border-gold/20">
+                  <div>
+                    <span class="text-gold font-bold block">25.1 – 50.0</span>
+                    <span class="text-ash text-[11px]">Moderate Disruption</span>
+                  </div>
+                  <span class="text-[10px] text-muted">Local Access</span>
+                </div>
+
+                <div class="p-3 rounded-lg bg-basalt flex items-center justify-between border border-ember/30">
+                  <div>
+                    <span class="text-ember font-bold block">50.1 – 75.0</span>
+                    <span class="text-ash text-[11px]">Substantial Damage</span>
+                  </div>
+                  <span class="text-[10px] text-muted">Rescue Needed</span>
+                </div>
+
+                <div class="p-3 rounded-lg bg-basalt flex items-center justify-between border border-red-500/30">
+                  <div>
+                    <span class="text-red-400 font-bold block">75.1 – 100.0</span>
+                    <span class="text-ash text-[11px]">Catastrophic Critical</span>
+                  </div>
+                  <span class="text-[10px] text-red-400 font-bold">Priority Red</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-4 pt-3 border-t border-bone/10 text-[11px] text-ash flex justify-between">
+              <span>Spatial Density Mask</span>
+              <span class="text-bone">DDM Active</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SLIDE 7: Multi-Task Heads & Safety Gating ================= -->
+    <section class="slide" data-slide="7" data-title="Multi-Task Heads &amp; Safety">
+      <div class="max-w-5xl">
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">07 · Multi-Task Classification &amp; Safety</span>
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
+          Three Dedicated Objectives &amp; Safety Abstention
+        </h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+          <div class="slide-card p-6 border-t-2 border-t-ember">
+            <span class="font-mono text-xs text-ember font-bold block mb-1">OBJECTIVE 1</span>
+            <h3 class="text-xl font-bold text-bone mb-2">Disaster Peril (6 Classes)</h3>
+            <p class="text-xs text-ash leading-relaxed mb-4">
+              Identifies the physical hazard to trigger specialized tactical equipment.
+            </p>
+            <div class="grid grid-cols-2 gap-1.5 font-mono text-[11px]">
+              <span class="p-1.5 rounded bg-basalt text-bone">🌊 Flood</span>
+              <span class="p-1.5 rounded bg-basalt text-bone">🔥 Wildfire</span>
+              <span class="p-1.5 rounded bg-basalt text-bone">🏚️ Earthquake</span>
+              <span class="p-1.5 rounded bg-basalt text-bone">⛰️ Landslide</span>
+              <span class="p-1.5 rounded bg-basalt text-bone">🌀 Hurricane</span>
+              <span class="p-1.5 rounded bg-basalt text-muted">⚪ Non-Disaster</span>
+            </div>
+          </div>
+
+          <div class="slide-card p-6 border-t-2 border-t-gold">
+            <span class="font-mono text-xs text-gold font-bold block mb-1">OBJECTIVE 2</span>
+            <h3 class="text-xl font-bold text-bone mb-2">Damage Severity (3 Tiers)</h3>
+            <p class="text-xs text-ash leading-relaxed mb-4">
+              Measures structural destruction to allocate emergency extraction units.
+            </p>
+            <div class="space-y-2 font-mono text-[11px]">
+              <div class="p-2 rounded bg-red-950/30 border border-red-500/20 text-red-400 flex justify-between">
+                <span>Severe Collapse</span>
+                <span class="font-bold">91% Recall</span>
+              </div>
+              <div class="p-2 rounded bg-amber-950/30 border border-amber-500/20 text-amber-400 flex justify-between">
+                <span>Mild Disruption</span>
+                <span class="font-bold">50% Recall</span>
+              </div>
+              <div class="p-2 rounded bg-emerald-950/30 border border-emerald-500/20 text-verdigris flex justify-between">
+                <span>Little or No Damage</span>
+                <span class="font-bold">92% Recall</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="slide-card p-6 border-t-2 border-t-verdigris">
+            <span class="font-mono text-xs text-verdigris font-bold block mb-1">OBJECTIVE 3</span>
+            <h3 class="text-xl font-bold text-bone mb-2">Informativeness Triage</h3>
+            <p class="text-xs text-ash leading-relaxed mb-4">
+              Automated gatekeeper discarding memes, cartoons, and obscured tiles.
+            </p>
+            <div class="space-y-2 font-mono text-[11px]">
+              <div class="p-2 rounded bg-basalt text-verdigris flex justify-between border border-verdigris/30">
+                <span>Tactical Disaster Evidence</span>
+                <span class="font-bold">91.91% Acc</span>
+              </div>
+              <div class="p-2 rounded bg-basalt text-ash flex justify-between border border-bone/10">
+                <span>Irrelevant Noise Purged</span>
+                <span class="font-bold">93% Spec</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2 Mission-Critical Safety Guards -->
+        <div class="slide-card p-5 grid grid-cols-1 sm:grid-cols-2 gap-4 font-mono text-xs">
+          <div class="flex items-start gap-3">
+            <span class="text-ember text-base">🛡️</span>
+            <div>
+              <strong class="text-bone block mb-0.5">Top-2 Margin Abstention ('uncertain' state):</strong>
+              <span class="text-ash">If top confidence &lt; 0.50 or margin between top-2 perils &lt; 0.16, the system outputs 'uncertain' rather than risking a dangerous forced misprediction.</span>
+            </div>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="text-verdigris text-base">📐</span>
+            <div>
+              <strong class="text-bone block mb-0.5">Mahalanobis Out-of-Distribution (OOD) Guard:</strong>
+              <span class="text-ash">Evaluates CNN embeddings against class-conditional Gaussian centroids with shrinkage covariance, flagging corrupted images.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SLIDE 8: Autonomous Multi-Agent Operational Workflow ================= -->
+    <section class="slide" data-slide="8" data-title="Autonomous Agent Orchestration">
+      <div class="max-w-5xl">
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">08 · Autonomous Multi-Agent Coordination</span>
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
+          Crew Orchestration &amp; Hallucination-Defense Lifecycle
+        </h2>
+
+        <!-- Step Workflow Stack -->
+        <div class="space-y-3 font-mono text-xs">
+          <div class="slide-card p-4 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+              <span class="w-7 h-7 rounded-lg bg-ember/20 text-ember flex items-center justify-center font-bold">1</span>
+              <div>
+                <span class="font-bold text-bone text-sm font-sans">Query Resolver &amp; Multi-Turn Temporal Memory</span>
+                <p class="text-ash text-[11px] mt-0.5">Disambiguates exonyms, tracks geographic topics across multi-turn prompts, and detects month/year mismatches.</p>
+              </div>
+            </div>
+            <span class="px-2.5 py-1 rounded bg-basalt text-muted border border-bone/10 hidden sm:inline">NLP Normalizer</span>
+          </div>
+
+          <div class="slide-card p-4 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+              <span class="w-7 h-7 rounded-lg bg-ember/20 text-ember flex items-center justify-center font-bold">2</span>
+              <div>
+                <span class="font-bold text-bone text-sm font-sans">Live Disaster Scout Agent</span>
+                <p class="text-ash text-[11px] mt-0.5">Polls real-time UN OCHA ReliefWeb and GDACS APIs for authoritative alert levels, bounding coordinates, and dates.</p>
+              </div>
+            </div>
+            <span class="px-2.5 py-1 rounded bg-ember/15 text-ember-soft border border-ember/30 hidden sm:inline">GDACS API Live</span>
+          </div>
+
+          <div class="slide-card p-4 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+              <span class="w-7 h-7 rounded-lg bg-ember/20 text-ember flex items-center justify-center font-bold">3</span>
+              <div>
+                <span class="font-bold text-bone text-sm font-sans">Overhead Evidence Harvester</span>
+                <p class="text-ash text-[11px] mt-0.5">Retrieves multi-vendor satellite and aerial imagery via Serper.dev with dynamic query composition and suitability filtering.</p>
+              </div>
+            </div>
+            <span class="px-2.5 py-1 rounded bg-basalt text-muted border border-bone/10 hidden sm:inline">Serper / Tier-1</span>
+          </div>
+
+          <div class="slide-card p-4 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+              <span class="w-7 h-7 rounded-lg bg-ember/20 text-ember flex items-center justify-center font-bold">4</span>
+              <div>
+                <span class="font-bold text-bone text-sm font-sans">Singleton Model Execution Pool</span>
+                <p class="text-ash text-[11px] mt-0.5">Executes 2,036-D hybrid inference across dedicated `ThreadPoolExecutor` workers without blocking streaming SSE loops.</p>
+              </div>
+            </div>
+            <span class="px-2.5 py-1 rounded bg-gold/15 text-gold border border-gold/30 hidden sm:inline">PyTorch Core</span>
+          </div>
+
+          <div class="slide-card-accent p-4 flex items-center justify-between">
+            <div class="flex items-center gap-4">
+              <span class="w-7 h-7 rounded-lg bg-verdigris/20 text-verdigris flex items-center justify-center font-bold">5</span>
+              <div>
+                <span class="font-bold text-bone text-sm font-sans">Strict Numeric Fidelity Gate &amp; Situation Reporter</span>
+                <p class="text-ash text-[11px] mt-0.5">Deterministic regex validator audits generated report text against verified facts block; rejects hallucinations with zero tolerance.</p>
+              </div>
+            </div>
+            <span class="px-2.5 py-1 rounded bg-verdigris/20 text-verdigris border border-verdigris/30 hidden sm:inline">Anti-Hallucination</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SLIDE 9: Empirical Results & Minority Recall Breakthrough ================= -->
+    <section class="slide" data-slide="9" data-title="Empirical Results &amp; Breakthroughs">
+      <div class="max-w-5xl">
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">09 · Rigorous Empirical Validation</span>
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
+          Benchmark Breakthroughs: 11,826 Independent Test Scenes
+        </h2>
+
+        <!-- 4 Stat Callout Cards -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <div class="slide-card p-5 text-center">
+            <span class="font-mono text-[11px] text-muted uppercase">Overall Accuracy</span>
+            <div class="text-3xl sm:text-4xl font-extrabold text-bone mt-1 font-mono">87.03%</div>
+            <span class="font-mono text-[10px] text-verdigris mt-1 block">+18.58 pts vs legacy 68.45%</span>
+          </div>
+          <div class="slide-card-accent p-5 text-center">
+            <span class="font-mono text-[11px] text-ember uppercase font-bold">Macro F1 Score</span>
+            <div class="text-3xl sm:text-4xl font-extrabold text-ember-soft mt-1 font-mono">66.00%</div>
+            <span class="font-mono text-[10px] text-ember mt-1 block">+25.79 pts vs legacy 40.21%</span>
+          </div>
+          <div class="slide-card p-5 text-center">
+            <span class="font-mono text-[11px] text-muted uppercase">Severe Collapse Recall</span>
+            <div class="text-3xl sm:text-4xl font-extrabold text-gold mt-1 font-mono">91.00%</div>
+            <span class="font-mono text-[10px] text-ash mt-1 block">4,379 severe crisis images</span>
+          </div>
+          <div class="slide-card p-5 text-center">
+            <span class="font-mono text-[11px] text-muted uppercase">Calibration ECE</span>
+            <div class="text-3xl sm:text-4xl font-extrabold text-verdigris mt-1 font-mono">0.0411</div>
+            <span class="font-mono text-[10px] text-verdigris mt-1 block">-71.7% error reduction</span>
+          </div>
+        </div>
+
+        <!-- Minority Hazard Recall Table -->
+        <div class="slide-card p-6">
+          <h4 class="font-bold text-bone text-xs font-mono uppercase tracking-wider text-ember mb-3">
+            Life-Critical Minority Hazard Breakthrough (11,826 Test Images)
+          </h4>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left font-mono text-xs">
+              <thead>
+                <tr class="border-b border-bone/10 text-muted text-[11px]">
+                  <th class="pb-2">Disaster Peril</th>
+                  <th class="pb-2">Test Volume</th>
+                  <th class="pb-2">Legacy Recall</th>
+                  <th class="pb-2">DisasterRes Recall</th>
+                  <th class="pb-2">Precision</th>
+                  <th class="pb-2">Operational Gain</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-bone/5 text-bone">
+                <tr class="bg-verdigris/10 font-bold">
+                  <td class="py-2.5 text-verdigris">🌊 Flood Inundation</td>
+                  <td>391 scenes</td>
+                  <td class="text-red-400">2.08%</td>
+                  <td class="text-verdigris">41.00%</td>
+                  <td>85.00%</td>
+                  <td class="text-verdigris">20× Recall Surge (Blindness Eliminated)</td>
+                </tr>
+                <tr class="bg-red-950/20 font-bold">
+                  <td class="py-2.5 text-red-400">⛰️ Landslide / Mudflow</td>
+                  <td>147 scenes</td>
+                  <td class="text-red-400">7.14%</td>
+                  <td class="text-red-400">41.00%</td>
+                  <td>68.00%</td>
+                  <td class="text-red-400">6× Recall Surge (Slope Safety Restored)</td>
+                </tr>
+                <tr>
+                  <td class="py-2.5">🔥 Wildfire Burn Scars</td>
+                  <td>438 scenes</td>
+                  <td>28.4%</td>
+                  <td class="text-ember font-bold">55.00%</td>
+                  <td>91.00%</td>
+                  <td>High Thermal Precision</td>
+                </tr>
+                <tr>
+                  <td class="py-2.5">🌀 Hurricane / Storm</td>
+                  <td>3,997 scenes</td>
+                  <td>82.1%</td>
+                  <td class="font-bold">90.00%</td>
+                  <td>82.00%</td>
+                  <td>Reliable Regional Coverage</td>
+                </tr>
+                <tr>
+                  <td class="py-2.5 text-muted">⚪ Non-Disaster Baseline</td>
+                  <td>6,471 scenes</td>
+                  <td>89.3%</td>
+                  <td class="font-bold text-ash">95.00%</td>
+                  <td>90.00%</td>
+                  <td>False Alarm Suppression</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SLIDE 10: Feature Ablation & CV Stability ================= -->
+    <section class="slide" data-slide="10" data-title="Ablation &amp; CV Stability">
+      <div class="max-w-5xl">
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">10 · Scientific Ablation &amp; Stability</span>
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
+          Ablation Proof &amp; 5-Fold Stratified Generalization
+        </h2>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+          <!-- Ablation Table -->
+          <div class="lg:col-span-7 slide-card p-6 flex flex-col justify-between">
+            <div>
+              <span class="font-mono text-xs text-ember uppercase font-bold block mb-1">Systematic Feature Ablation</span>
+              <h3 class="text-lg font-bold text-bone mb-4">Empirical Proof: Why Textures Matter</h3>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left font-mono text-xs">
+                  <thead>
+                    <tr class="border-b border-bone/10 text-muted text-[11px]">
+                      <th class="pb-2">Configuration</th>
+                      <th class="pb-2">Dims</th>
+                      <th class="pb-2">Peril Acc</th>
+                      <th class="pb-2">Macro F1</th>
+                      <th class="pb-2">Rubble Gain</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-bone/5 text-bone">
+                    <tr>
+                      <td class="py-2.5">Inception-ResNet-V2 Only</td>
+                      <td>1,000-D</td>
+                      <td>81.2%</td>
+                      <td>54.2%</td>
+                      <td class="text-muted">Baseline</td>
+                    </tr>
+                    <tr>
+                      <td class="py-2.5">+ Saliency Stream ($df_1 + df_2$)</td>
+                      <td>2,000-D</td>
+                      <td>84.6%</td>
+                      <td>60.8%</td>
+                      <td class="text-verdigris">+ 3.4%</td>
+                    </tr>
+                    <tr>
+                      <td class="py-2.5">+ 20-D GLCM Matrices</td>
+                      <td>2,020-D</td>
+                      <td>85.8%</td>
+                      <td>63.1%</td>
+                      <td class="text-verdigris">+ 4.9%</td>
+                    </tr>
+                    <tr class="bg-ember/10 font-bold">
+                      <td class="py-2.5 text-ember-soft">Full Hybrid ($df_1 + df_2 + \text{GLCM} + \text{LBP}$)</td>
+                      <td class="text-ember">2,036-D</td>
+                      <td class="text-verdigris">87.03%</td>
+                      <td class="text-verdigris">66.00%</td>
+                      <td class="text-verdigris">+ 6.8% (Optimal)</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="mt-4 pt-3 border-t border-bone/10 font-mono text-[11px] text-muted">
+              Evaluated across 27,586 train and 11,826 test images on NVIDIA RTX 4060 GPU.
+            </div>
+          </div>
+
+          <!-- Cross-Validation Stability Column -->
+          <div class="lg:col-span-5 slide-card p-6 flex flex-col justify-between">
+            <div>
+              <span class="font-mono text-xs text-verdigris uppercase font-bold block mb-1">5-Fold Stratified Cross-Validation</span>
+              <h3 class="text-lg font-bold text-bone mb-4">Partition Invariance ($\sigma &lt; 0.60\%$)</h3>
+              
+              <div class="space-y-3 font-mono text-xs">
+                <div class="p-3 rounded-lg bg-basalt border border-bone/5">
+                  <div class="flex justify-between text-muted text-[11px]">
+                    <span>Peril Classification:</span>
+                    <span class="text-verdigris font-bold">84.81% ± 0.59%</span>
+                  </div>
+                  <div class="w-full bg-basalt-2 h-1.5 rounded-full mt-2 overflow-hidden">
+                    <div class="h-full bg-verdigris rounded-full" style="width: 84.81%;"></div>
+                  </div>
+                </div>
+
+                <div class="p-3 rounded-lg bg-basalt border border-bone/5">
+                  <div class="flex justify-between text-muted text-[11px]">
+                    <span>Damage Severity Head:</span>
+                    <span class="text-gold font-bold">86.12% ± 0.49%</span>
+                  </div>
+                  <div class="w-full bg-basalt-2 h-1.5 rounded-full mt-2 overflow-hidden">
+                    <div class="h-full bg-gold rounded-full" style="width: 86.12%;"></div>
+                  </div>
+                </div>
+
+                <div class="p-3 rounded-lg bg-basalt border border-bone/5">
+                  <div class="flex justify-between text-muted text-[11px]">
+                    <span>Informativeness Filter:</span>
+                    <span class="text-ember font-bold">89.66% ± 0.42%</span>
+                  </div>
+                  <div class="w-full bg-basalt-2 h-1.5 rounded-full mt-2 overflow-hidden">
+                    <div class="h-full bg-ember rounded-full" style="width: 89.66%;"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-4 pt-3 border-t border-bone/10 font-mono text-[11px] text-muted">
+              All cross-validation standard deviations $\sigma &lt; 0.60\%$, proving generalizability.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SLIDE 11: Deployment Horizons & Conclusion ================= -->
+    <section class="slide" data-slide="11" data-title="Deployment Horizons &amp; Conclusion">
+      <div class="max-w-5xl">
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">11 · Operational Deployment &amp; Next Frontiers</span>
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-8">
+          Ready for the Field: Operational Horizons
+        </h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div class="slide-card p-6">
+            <div class="text-ember text-2xl mb-3">📡</div>
+            <h3 class="text-xl font-bold text-bone mb-2">Multispectral SAR &amp; Thermal</h3>
+            <p class="text-xs text-ash leading-relaxed">
+              Fusing Synthetic Aperture Radar (Sentinel-1 / ICEYE) and Long-Wave Infrared (LWIR) to penetrate hurricane clouds and night-time wildfire canopies.
+            </p>
+          </div>
+
+          <div class="slide-card p-6">
+            <div class="text-verdigris text-2xl mb-3">🚁</div>
+            <h3 class="text-xl font-bold text-bone mb-2">Edge Drone Mesh (INT8 / FP8)</h3>
+            <p class="text-xs text-ash leading-relaxed">
+              Exporting quantized model checkpoints to NVIDIA Jetson Orin Nano modules mounted onto autonomous search-and-rescue UAVs under network blackouts.
+            </p>
+          </div>
+
+          <div class="slide-card p-6">
+            <div class="text-gold text-2xl mb-3">🗺️</div>
+            <h3 class="text-xl font-bold text-bone mb-2">GIS Vector Evacuation Routing</h3>
+            <p class="text-xs text-ash leading-relaxed">
+              Exporting Module M2 damage polygons to GeoJSON / Shapefiles, interfacing with OpenStreetMap to calculate detours around flooded bridges.
+            </p>
+          </div>
+        </div>
+
+        <div class="slide-card-accent p-6 flex flex-col sm:flex-row items-center justify-between gap-4 font-mono text-xs">
+          <div>
+            <h3 class="text-xl font-bold text-bone font-sans">DisasterRes · Production-Grade Disaster Intelligence</h3>
+            <p class="text-ash mt-0.5">Bridging multimodal computer vision with autonomous agentic decision support for global humanitarian relief.</p>
+          </div>
+          <span class="px-3 py-1.5 rounded-lg bg-basalt text-bone border border-bone/15 shrink-0">
+            github.com/DisasterRes-Net
+          </span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- MINIMALIST FLOATING CONTROLS DOCK (NO NAVBAR) -->
+  <div class="controls-dock">
+    <button id="prevBtn" class="btn-nav" title="Previous Slide [←]">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+    </button>
+    <button id="nextBtn" class="btn-nav" title="Next Slide [→]">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+    </button>
+    <span class="w-px h-3.5 bg-white/15 mx-0.5"></span>
+    <button id="gridBtn" class="btn-nav" title="Slide Matrix [G]">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+    </button>
+    <button id="fullscreenBtn" class="btn-nav" title="Fullscreen [F]">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+    </button>
+  </div>
+
+  <!-- SLIDE NUMBER WATERMARK -->
+  <div class="slide-tag">
+    <span class="active-num" id="currentSlideNum">01</span>
+    <span class="text-white/20">/</span>
+    <span id="totalSlidesNum">11</span>
+    <span class="text-white/20">·</span>
+    <span id="slideTitleTag" class="text-ash truncate max-w-xs">DisasterRes — Title</span>
+  </div>
+
+  <!-- SLIDE OVERVIEW MATRIX MODAL -->
+  <div id="gridModal" class="fixed inset-0 z-50 bg-basalt/95 backdrop-blur-2xl hidden flex-col p-8 sm:p-14 overflow-y-auto">
+    <div class="flex items-center justify-between mb-8 max-w-6xl mx-auto w-full">
+      <div class="flex items-center gap-3">
+        <span class="w-2.5 h-2.5 rounded-full bg-ember animate-pulse"></span>
+        <h2 class="text-2xl font-extrabold text-bone">Slide Overview Matrix</h2>
+        <span class="font-mono text-xs text-muted">11 Slides</span>
+      </div>
+      <button id="closeGridBtn" class="px-3.5 py-1.5 rounded-lg border border-bone/20 text-xs font-mono text-bone hover:border-ember transition">
+        Close Matrix [ESC]
+      </button>
+    </div>
+
+    <div id="gridContainer" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 max-w-6xl mx-auto w-full pb-12">
+      <!-- Injected via JavaScript -->
+    </div>
+  </div>
+
+  <!-- JAVASCRIPT SLIDE ENGINE -->
+  <script>
+    const slides = Array.from(document.querySelectorAll('.slide'));
+    const totalSlides = slides.length;
+    let currentSlide = 0;
+
+    // DOM Elements
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const currentSlideNum = document.getElementById('currentSlideNum');
+    const totalSlidesNum = document.getElementById('totalSlidesNum');
+    const slideTitleTag = document.getElementById('slideTitleTag');
+    const gridBtn = document.getElementById('gridBtn');
+    const gridModal = document.getElementById('gridModal');
+    const closeGridBtn = document.getElementById('closeGridBtn');
+    const gridContainer = document.getElementById('gridContainer');
+    const fullscreenBtn = document.getElementById('fullscreenBtn');
+
+    totalSlidesNum.textContent = String(totalSlides).padStart(2, '0');
+
+    // Build Slide Grid Cards
+    slides.forEach((slide, i) => {
+      const card = document.createElement('div');
+      card.className = 'slide-card p-5 cursor-pointer hover:border-ember transition group flex flex-col justify-between h-40';
+      card.innerHTML = `
+        <div>
+          <span class="font-mono text-[10px] text-muted uppercase tracking-wider block mb-1">SLIDE ${String(i + 1).padStart(2, '0')}</span>
+          <h4 class="font-bold text-sm text-bone group-hover:text-ember-soft transition">${slide.getAttribute('data-title') || 'Slide ' + (i+1)}</h4>
+        </div>
+        <div class="font-mono text-[10px] text-muted flex items-center justify-between border-t border-bone/5 pt-2">
+          <span>JUMP TO SLIDE</span>
+          <span class="group-hover:text-ember transition">↵</span>
+        </div>
+      `;
+      card.onclick = () => {
+        goToSlide(i);
+        gridModal.classList.add('hidden');
+      };
+      gridContainer.appendChild(card);
+    });
+
+    function updateSlide() {
+      slides.forEach((s, i) => {
+        if (i === currentSlide) {
+          s.classList.add('active');
+        } else {
+          s.classList.remove('active');
+        }
+      });
+
+      // Update counters & title tag
+      const activeSlide = slides[currentSlide];
+      currentSlideNum.textContent = String(currentSlide + 1).padStart(2, '0');
+      slideTitleTag.textContent = activeSlide.getAttribute('data-title') || `Slide ${currentSlide + 1}`;
+    }
+
+    function goToSlide(n) {
+      currentSlide = Math.max(0, Math.min(n, totalSlides - 1));
+      updateSlide();
+    }
+
+    function nextSlide() {
+      if (currentSlide < totalSlides - 1) {
+        goToSlide(currentSlide + 1);
+      }
+    }
+
+    function prevSlide() {
+      if (currentSlide > 0) {
+        goToSlide(currentSlide - 1);
+      }
+    }
+
+    // Control Handlers
+    prevBtn.onclick = prevSlide;
+    nextBtn.onclick = nextSlide;
+
+    gridBtn.onclick = () => gridModal.classList.toggle('hidden');
+    closeGridBtn.onclick = () => gridModal.classList.add('hidden');
+
+    fullscreenBtn.onclick = () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+    };
+
+    // Keyboard Shortcuts (Standard Presentation Controls)
+    window.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'INPUT') return;
+
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+        e.preventDefault();
+        nextSlide();
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        prevSlide();
+      } else if (e.key.toLowerCase() === 'g') {
+        gridModal.classList.toggle('hidden');
+      } else if (e.key.toLowerCase() === 'f') {
+        fullscreenBtn.click();
+      } else if (e.key === 'Escape') {
+        gridModal.classList.add('hidden');
+      } else if (e.key === 'Home') {
+        goToSlide(0);
+      } else if (e.key === 'End') {
+        goToSlide(totalSlides - 1);
+      }
+    });
+
+    // Touch Swipe Support
+    let touchStartX = 0;
+    window.addEventListener('touchstart', (e) => { touchStartX = e.changedTouches[0].screenX; }, { passive: true });
+    window.addEventListener('touchend', (e) => {
+      const touchEndX = e.changedTouches[0].screenX;
+      if (touchStartX - touchEndX > 50) nextSlide();
+      if (touchEndX - touchStartX > 50) prevSlide();
+    }, { passive: true });
+
+    // Initialize
+    updateSlide();
+  </script>
+</body>
+</html>
