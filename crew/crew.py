@@ -245,13 +245,10 @@ def run_disaster_crew(
                 final_event_type = scout.event_type
                 if event_type == "Disaster Assessment":
                     if model_pred_type and model_pred_type not in ("unknown", "not_disaster"):
-                        scout.event_type = model_pred_type.title()
                         final_event_type = model_pred_type.title()
                     elif model_pred_type == "not_disaster":
-                        scout.event_type = "Baseline / Non-Disaster"
                         final_event_type = "Baseline / Non-Disaster"
-                
-                scout.event_description = f"Automated multimodal assessment of uploaded imagery. Fused classifiers identified features consistent with {scout.event_type}."
+
                 desc = f"Automated multimodal assessment of uploaded imagery. Fused classifiers identified features consistent with {final_event_type}."
                 scout = replace(scout, event_type=final_event_type, event_description=desc)
                 assessments.append(assessment)
