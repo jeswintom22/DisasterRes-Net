@@ -60,35 +60,91 @@ function formatReportContent(content = '') {
     .replace(/Confidence:\s*Low/gi, 'Confidence: Verified');
 }
 
+/** Extract markdown images out of markdown text so they can be rendered as top-level thumbnail strip */
+function parseReportImages(markdownText = '') {
+  const imgRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  const images = [];
+  let cleanText = markdownText;
+  let match;
+  while ((match = imgRegex.exec(markdownText)) !== null) {
+    images.push({ alt: match[1] || 'Evidence Image', url: match[2] });
+  }
+  cleanText = cleanText.replace(imgRegex, '').replace(/###\s*Analysed Satellite Imagery\s*/gi, '').trim();
+  return { images, cleanText };
+}
+
 function Report({ msg, onImageClick }) {
-  const content = formatReportContent(msg.content || '');
-  const { visible, streaming } = useTokenStream(content, !!msg.stream);
+  const rawContent = formatReportContent(msg.content || '');
+  const { images: inlineImages, cleanText } = useMemo(() => parseReportImages(rawContent), [rawContent]);
+  const { visible, streaming } = useTokenStream(cleanText, !!msg.stream);
   const html = DOMPurify.sanitize(marked.parse(visible));
   const f = msg.facts || {};
+
+  // Combine inline markdown images with any raw visualizations or single result image
+  const galleryImages = useMemo(() => {
+    const list = [...inlineImages];
+    if (f.visualizations) {
+      Object.entries(f.visualizations).forEach(([name, b64]) => {
+        list.push({ alt: name, url: b64, label: name });
+      });
+    }
+    if (msg.result_image && !f.visualizations && list.length === 0) {
+      const results = Array.isArray(msg.result_image) ? msg.result_image : [msg.result_image];
+      results.forEach((url, idx) => list.push({ alt: `Evidence ${idx + 1}`, url }));
+    }
+    return list;
+  }, [inlineImages, f.visualizations, msg.result_image]);
+
+  const handleContainerClick = (e) => {
+    if (e.target && e.target.tagName === 'IMG') {
+      const src = e.target.getAttribute('src');
+      if (src) {
+        e.preventDefault();
+        onImageClick?.(src);
+      }
+    }
+  };
+
   return (
     <div className="max-w-[88%] border-l-[3px] border-ember/80 bg-basalt-2/40 backdrop-blur-sm p-5 rounded-r-2xl shadow-[0_4px_24px_-8px_rgba(0,0,0,0.5)]">
-      <div className="md prose prose-invert prose-p:leading-relaxed prose-pre:bg-basalt-3" dangerouslySetInnerHTML={{ __html: html }} />
+      {/* Top thumbnail row (like user uploaded preview cards) if gallery images exist */}
+      {galleryImages.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 mb-5 pb-4 border-b border-bone/10">
+          {galleryImages.map((img, idx) => (
+            <div
+              key={idx}
+              className="relative group cursor-pointer overflow-hidden rounded-2xl border border-bone/15 hover:border-ember bg-basalt-3/60 transition-all duration-300 hover:scale-105 hover:shadow-[0_8px_24px_-4px_rgba(255,90,31,0.3)]"
+              onClick={() => onImageClick?.(img.url)}
+              title={img.alt || img.label || 'Click to preview full size'}
+            >
+              <img
+                src={img.url}
+                alt={img.alt || `Evidence ${idx + 1}`}
+                className="w-20 h-20 sm:w-24 sm:h-24 object-cover transition-transform duration-300 group-hover:scale-110"
+              />
+              {img.label && (
+                <div className="absolute inset-x-0 bottom-0 bg-black/70 px-1.5 py-0.5 text-center font-mono text-[9px] uppercase tracking-wider text-bone/90 backdrop-blur-sm truncate">
+                  {img.label}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Narrative Report Content */}
+      <div
+        className="md prose prose-invert prose-p:leading-relaxed prose-pre:bg-basalt-3"
+        dangerouslySetInnerHTML={{ __html: html }}
+        onClick={handleContainerClick}
+      />
       {streaming && <span className="caret inline-block w-2 h-4 bg-ember ml-1 align-middle animate-pulse" aria-hidden />}
+      
       {msg.meta && !streaming && (
         <div className="mt-5 border-t border-bone/10 pt-4 flex flex-wrap gap-x-6 gap-y-2 font-mono text-[11px] uppercase tracking-[.18em] text-ash/80">
           <span className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-ember"></span> Mode · {msg.meta.narration || 'deterministic'}</span>
           <span className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-bone"></span> Analysed · {f.images_analysed ?? 0}</span>
           <span className="flex items-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-bone/50"></span> Rejected · {f.images_rejected ?? 0}</span>
-        </div>
-      )}
-      {f.visualizations && !streaming && (
-        <div className="mt-4 grid grid-cols-2 gap-2">
-           {Object.entries(f.visualizations).map(([name, b64]) => (
-             <div key={name} className="relative group cursor-pointer" onClick={() => onImageClick?.(b64)}>
-               <img src={b64} alt={name} className="w-full h-32 object-cover rounded-lg border border-bone/10 hover:border-ember transition-colors" />
-               <div className="absolute bottom-1 left-1 bg-black/60 px-2 py-0.5 rounded text-[10px] text-bone font-mono uppercase backdrop-blur-md">{name}</div>
-             </div>
-           ))}
-        </div>
-      )}
-      {msg.result_image && !streaming && !f.visualizations && (
-        <div className="mt-6 -mx-2 -mb-2 overflow-hidden rounded-xl border border-bone/10 cursor-pointer" onClick={() => onImageClick?.(msg.result_image)}>
-          <img src={msg.result_image} alt="Result" className="w-full h-auto object-cover hover:scale-[1.02] transition-transform duration-500" />
         </div>
       )}
     </div>
@@ -99,14 +155,14 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [stage, setStage] = useState(null);
   const [upload, setUpload] = useState(0);
-  const [pendingUpload, setPendingUpload] = useState(null);
+  const [pendingUploads, setPendingUploads] = useState([]);
   const [lightbox, setLightbox] = useState(null);
   const [start, setStart] = useState({ x: 24, y: 120 });
   const placeholder = useRef(null);
   const endRef = useRef(null);
   const eventSourceRef = useRef(null);
   
-  const hasChat = messages.length > 0 || stage !== null || pendingUpload !== null;
+  const hasChat = messages.length > 0 || stage !== null || pendingUploads.length > 0;
 
   /* ── scroll-linked hero: shrinks and flies to the top-left corner ── */
   const { scrollY: rawScroll } = useScroll();
@@ -171,11 +227,12 @@ export default function App() {
   useEffect(() => { if (pinned.current) scrollBottom(); }, [messages, stage]);
 
   /* ── real backend: POST /api/chat → SSE /api/chat/stream/:job ── */
-  const handleSend = async (query, imageUrl = null, base64 = null) => {
-    setMessages((m) => [...m, { role: 'user', content: query, image: imageUrl }]);
+  const handleSend = async (query, imageUrls = null, base64 = null) => {
+    const imagesArray = Array.isArray(imageUrls) ? imageUrls : (imageUrls ? [imageUrls] : []);
+    setMessages((m) => [...m, { role: 'user', content: query, images: imagesArray }]);
     setStage({ label: 'Working', state: 'working', variant: 'gyro', detail: 'starting investigation' });
     toBottom();
-    const lastImage = imageUrl || [...messages].reverse().find(m => m.role === 'user' && m.image)?.image;
+
     let payload = { query };
     if (base64) payload.image = base64;
     const fail = (text) => {
@@ -200,7 +257,7 @@ export default function App() {
           source.close();
           setStage(null);
           const r = item.result || {};
-          setMessages((m) => [...m, { role: 'ai', stream: true, content: r.response || '', facts: r.facts, meta: { narration: r.narration }, result_image: lastImage }]);
+          setMessages((m) => [...m, { role: 'ai', stream: true, content: r.response || '', facts: r.facts, meta: { narration: r.narration }, result_image: imagesArray }]);
           toBottom();
         } else if (item.stage === 'error') {
           source.close();
@@ -223,22 +280,34 @@ export default function App() {
     setStage(null);
   };
 
-  const handleUpload = async (file) => {
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = async () => {
-      const base64 = reader.result;
-      for (let i = 4; i <= 100; i += 12) {
-        setUpload(Math.min(i, 100));
-        await new Promise(r => setTimeout(r, 90));
-      }
-      setUpload(100);
-      await new Promise(r => setTimeout(r, 600));
-      setUpload(0);
-      setPendingUpload({ url, base64 });
-    };
+  const handleUpload = async (files) => {
+    const fileList = Array.isArray(files) ? files : [files];
+    if (fileList.length === 0) return;
+
+    for (let i = 4; i <= 100; i += 18) {
+      setUpload(Math.min(i, 100));
+      await new Promise(r => setTimeout(r, 60));
+    }
+
+    const newUploads = await Promise.all(
+      fileList.map((file) => {
+        return new Promise((resolve) => {
+          const url = URL.createObjectURL(file);
+          const reader = new FileReader();
+          reader.readAsDataURL(file);
+          reader.onload = () => resolve({ url, base64: reader.result });
+        });
+      })
+    );
+
+    setUpload(100);
+    await new Promise(r => setTimeout(r, 400));
+    setUpload(0);
+    setPendingUploads((prev) => [...prev, ...newUploads]);
+  };
+
+  const handleRemovePending = (idx) => {
+    setPendingUploads((prev) => prev.filter((_, i) => i !== idx));
   };
 
   useEffect(() => { document.title = 'DisasterRes · Satellite damage assessment'; }, []);
@@ -279,14 +348,17 @@ export default function App() {
           <div className="mx-auto max-w-3xl">
             <AIPromptBox 
               onSubmit={(q) => {
-                if (!q.trim() && !pendingUpload) return;
-                handleSend(q || 'Analyze this imagery', pendingUpload?.url, pendingUpload?.base64);
-                setPendingUpload(null);
+                if (!q.trim() && pendingUploads.length === 0) return;
+                const urls = pendingUploads.map(p => p.url);
+                // Send primary base64 image (first) to backend for pipeline analysis
+                const primaryB64 = pendingUploads.length > 0 ? pendingUploads[0].base64 : null;
+                handleSend(q || 'Analyze this imagery', urls, primaryB64);
+                setPendingUploads([]);
               }} 
               onAttach={handleUpload} 
               isLoading={!!stage}
-              thumbnail={pendingUpload?.url}
-              onClearThumbnail={() => setPendingUpload(null)}
+              thumbnail={pendingUploads}
+              onClearThumbnail={handleRemovePending}
               onStop={handleStop}
             />
           </div>
@@ -303,9 +375,25 @@ export default function App() {
             <motion.div key={i} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               {msg.role === 'user' && (
-                <div className="flex flex-col items-end gap-2">
-                  {msg.image && (
-                    <img src={msg.image} alt="Uploaded" className="max-w-[240px] rounded-xl border border-bone/10 cursor-pointer hover:opacity-90 transition-opacity" onClick={() => setLightbox(msg.image)} />
+                <div className="flex flex-col items-end gap-2.5">
+                  {/* Clean row of rounded preview tiles for user uploaded images */}
+                  {msg.images && msg.images.length > 0 && (
+                    <div className="flex flex-wrap items-center justify-end gap-2.5">
+                      {msg.images.map((imgUrl, imgIdx) => (
+                        <div
+                          key={imgIdx}
+                          className="relative group cursor-pointer overflow-hidden rounded-2xl border border-bone/20 hover:border-ember bg-basalt-3 shadow-md hover:scale-105 transition-all duration-200"
+                          onClick={() => setLightbox(imgUrl)}
+                          title="Click to preview full size"
+                        >
+                          <img
+                            src={imgUrl}
+                            alt={`Upload ${imgIdx + 1}`}
+                            className="w-20 h-20 sm:w-24 sm:h-24 object-cover transition-transform duration-200 group-hover:scale-110"
+                          />
+                        </div>
+                      ))}
+                    </div>
                   )}
                   {msg.content && (
                     <div className="max-w-[80%] rounded-2xl rounded-br-[4px] bg-bone/90 backdrop-blur pl-4 pr-6 py-2.5 text-[15px] leading-snug text-basalt shadow-sm text-left">{msg.content}</div>
@@ -340,15 +428,16 @@ export default function App() {
         {lightbox && (
           <motion.div 
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] grid place-items-center bg-black/80 p-6 backdrop-blur-xl"
+            className="fixed inset-0 z-[100] grid place-items-center bg-black/85 p-6 backdrop-blur-2xl"
             onClick={() => setLightbox(null)}
           >
-            <button className="absolute top-6 right-6 text-bone hover:text-white bg-white/10 hover:bg-white/20 rounded-full p-2 transition" onClick={() => setLightbox(null)}>
+            <button className="absolute top-6 right-6 text-bone hover:text-white bg-white/10 hover:bg-white/20 rounded-full p-2.5 transition shadow-lg" onClick={() => setLightbox(null)}>
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
             </button>
             <motion.img 
-              initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
-              src={lightbox} alt="Enlarged" className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl" 
+              initial={{ scale: 0.92, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.92, opacity: 0 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+              src={lightbox} alt="Full preview" className="max-h-[90vh] max-w-[90vw] rounded-2xl object-contain shadow-2xl border border-bone/20" 
               onClick={e => e.stopPropagation()} 
             />
           </motion.div>

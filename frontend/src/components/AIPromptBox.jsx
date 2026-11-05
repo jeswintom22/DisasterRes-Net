@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowUp, Globe, BrainCog, PenLine, Paperclip, Square } from 'lucide-react';
+import { ArrowUp, Globe, BrainCog, PenLine, Paperclip, Square, X } from 'lucide-react';
 
 /* AI prompt box: auto-growing textarea, Search / Think / Canvas mode toggles, attach, morphing send button. */
 const MODES = [
@@ -16,6 +16,8 @@ export function AIPromptBox({ onSubmit, onAttach, isLoading, thumbnail, onClearT
   const ref = useRef(null);
   const fileRef = useRef(null);
 
+  const thumbnails = Array.isArray(thumbnail) ? thumbnail : (thumbnail ? [thumbnail] : []);
+
   useEffect(() => {
     const el = ref.current; if (!el) return;
     el.style.height = 'auto';
@@ -23,7 +25,7 @@ export function AIPromptBox({ onSubmit, onAttach, isLoading, thumbnail, onClearT
   }, [value]);
 
   const send = () => {
-    if ((!value.trim() && !thumbnail) || isLoading) return;
+    if ((!value.trim() && thumbnails.length === 0) || isLoading) return;
     onSubmit?.(value.trim(), Object.keys(modes).filter(k => modes[k]));
     setValue('');
   };
@@ -36,12 +38,35 @@ export function AIPromptBox({ onSubmit, onAttach, isLoading, thumbnail, onClearT
       className="rounded-[28px] bg-basalt-2/90 p-3 backdrop-blur-xl"
     >
       <AnimatePresence>
-        {thumbnail && (
-          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 64 }} exit={{ opacity: 0, height: 0 }} className="relative mb-2 ml-3">
-            <img src={thumbnail} alt="Upload preview" className="h-16 w-16 object-cover rounded-lg border border-bone/20" />
-            <button onClick={onClearThumbnail} className="absolute -top-2 -right-[60px] bg-basalt-3 text-ash hover:text-bone rounded-full p-1" style={{ right: 'calc(100% - 72px)' }}>
-               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-            </button>
+        {thumbnails.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="flex flex-wrap items-center gap-2 mb-3 px-2 pt-1"
+          >
+            {thumbnails.map((item, idx) => {
+              const url = typeof item === 'string' ? item : item?.url;
+              return (
+                <div key={idx} className="relative group/thumb">
+                  <img
+                    src={url}
+                    alt={`Upload ${idx + 1}`}
+                    className="h-16 w-16 sm:h-20 sm:w-20 object-cover rounded-xl border border-bone/20 shadow-md group-hover/thumb:border-ember/60 transition-colors"
+                  />
+                  {onClearThumbnail && (
+                    <button
+                      type="button"
+                      aria-label="Remove image"
+                      onClick={() => onClearThumbnail(idx)}
+                      className="absolute -top-1.5 -right-1.5 bg-basalt-3/90 text-ash hover:text-bone hover:bg-ember rounded-full p-1 border border-bone/20 shadow-lg transition-colors"
+                    >
+                      <X size={12} strokeWidth={2.5} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </motion.div>
         )}
       </AnimatePresence>
@@ -53,12 +78,19 @@ export function AIPromptBox({ onSubmit, onAttach, isLoading, thumbnail, onClearT
         className="scrollbar-thin w-full resize-none bg-transparent px-3 pt-2 pb-1 text-[16px] text-bone
                    placeholder:text-ash/70 placeholder:font-serif placeholder:italic placeholder:text-[17px] focus:outline-none"
       />
-      <input type="file" ref={fileRef} className="hidden" accept="image/*" onChange={e => {
-        if (e.target.files[0]) {
-          onAttach?.(e.target.files[0]);
-          e.target.value = '';
-        }
-      }} />
+      <input
+        type="file"
+        ref={fileRef}
+        multiple
+        className="hidden"
+        accept="image/*"
+        onChange={e => {
+          if (e.target.files && e.target.files.length > 0) {
+            onAttach?.(Array.from(e.target.files));
+            e.target.value = '';
+          }
+        }}
+      />
       <div className="mt-1 flex items-center gap-1.5">
         <button type="button" aria-label="Attach file" onClick={() => fileRef.current?.click()}
           className="grid h-9 w-9 place-items-center rounded-full text-ash transition hover:bg-basalt-3 hover:text-bone">
@@ -85,7 +117,7 @@ export function AIPromptBox({ onSubmit, onAttach, isLoading, thumbnail, onClearT
           type="button" aria-label={isLoading ? 'Stop' : 'Send'} onClick={isLoading ? onStop : send}
           whileTap={{ scale: .9 }} whileHover={{ scale: 1.06 }}
           className={`ml-auto grid h-10 w-10 place-items-center rounded-full transition-colors
-            ${isLoading ? 'bg-ash/20 text-ash hover:bg-ember hover:text-basalt' : (value.trim() || thumbnail) ? 'bg-ember text-basalt shadow-[0_0_24px_rgba(255,90,31,.55)]' : 'bg-basalt-3 text-ash'}`}
+            ${isLoading ? 'bg-ash/20 text-ash hover:bg-ember hover:text-basalt' : (value.trim() || thumbnails.length > 0) ? 'bg-ember text-basalt shadow-[0_0_24px_rgba(255,90,31,.55)]' : 'bg-basalt-3 text-ash'}`}
         >
           {isLoading ? <Square size={14} fill="currentColor" /> : <ArrowUp size={18} strokeWidth={2.4} />}
         </motion.button>
