@@ -91,6 +91,24 @@ body {
 .md tr:hover td { background: rgba(255,90,31,.05); }
 .md hr { border: 0; border-top: 1px solid rgba(239,230,211,.12); margin: 1.8em 0; }
 
+/* Clean pre/code blocks inside markdown so any code blocks wrap text and never clip */
+.md pre {
+  background: var(--color-basalt-3);
+  padding: 1rem 1.25rem;
+  border-radius: 12px;
+  border: 1px solid rgba(239, 230, 211, 0.1);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.md pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Markdown inline images styled as modern rounded preview tiles */
 .md img {
   display: inline-block;

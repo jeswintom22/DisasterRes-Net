@@ -48,6 +48,7 @@ def _openai_narrate(facts: FactsBlock, fallback: str, sink: Callable[[dict[str, 
     _emit(run, sink, "narration", "Generating constrained narration with OpenAI")
     facts_json = json.dumps({"event": facts.scout.event_description, "event_type": facts.scout.event_type, "date": facts.scout.event_date, "analysis": facts.analysis.__dict__, "disclaimer": facts.disclaimer}, ensure_ascii=False)
     prompt = ("Write a concise Markdown disaster situation report using ONLY the supplied JSON facts. "
+              "Do NOT wrap the entire response in triple backticks or ```markdown code blocks; output raw Markdown text directly. "
               "Preserve every numeric value exactly, never invent casualties or facts, and include sections "
               "with H3 headings: ### Overview, ### Damage Assessment, ### Emergency Recommendations, ### Caveats, ### Sources, and ### Run ID. "
               "If a metric is null, say it was unavailable. Include 'No validated overhead imagery' if images_analysed is 0. JSON facts:\n" + facts_json)

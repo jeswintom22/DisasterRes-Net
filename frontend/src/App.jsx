@@ -53,11 +53,18 @@ function useTokenStream(text, enabled) {
 function formatReportContent(content = '') {
   if (!content) return '';
   const now = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  return content
+  let cleaned = content
     .replace(/Disaster Situation Report — Unknown Location/gi, 'Disaster Situation Report — Uploaded Scene')
     .replace(/Event:\s*Unknown Disaster/gi, 'Event: Spatial Damage Assessment')
     .replace(/\|\s*Date:\s*unknown/gi, `| Date: ${now}`)
     .replace(/Confidence:\s*Low/gi, 'Confidence: Verified');
+
+  // Strip wrapping markdown code blocks (e.g. ```markdown ... ```) if emitted by LLMs
+  cleaned = cleaned.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
+  }
+  return cleaned;
 }
 
 /** Extract markdown images out of markdown text so they can be rendered as top-level thumbnail strip */
