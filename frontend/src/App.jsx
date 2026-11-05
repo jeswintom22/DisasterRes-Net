@@ -8,6 +8,7 @@ import { RadialProgress } from './components/RadialProgress';
 import { Dock } from './components/Dock';
 import { Text3DFlip } from './components/Text3DFlip';
 import { AIPromptBox } from './components/AIPromptBox';
+import { ImageAnalysisDashboard } from './components/ImageAnalysisDashboard';
 
 marked.use({
   breaks: true,
@@ -450,25 +451,72 @@ export default function App() {
 
   useEffect(() => { document.title = 'DisasterRes · Satellite damage assessment'; }, []);
 
+  const isAnalyze = activeDock === 'analyze' || activeDock === 'upload';
+
   return (
-    <div className="relative min-h-[150vh] overflow-x-hidden pb-52">
+    <div className={`relative overflow-x-hidden ${isAnalyze ? 'min-h-screen pb-20' : 'min-h-[150vh] pb-52'}`}>
       <div className="atmosphere" /><div className="topo" /><div className="grain" />
 
-      {/* top bar fades in once the hero has docked */}
-      <motion.div style={{ opacity: bar }}
-        className="pointer-events-none fixed inset-x-0 top-0 z-30 h-14 border-b border-bone/10 bg-basalt/70 backdrop-blur-xl" />
+      {/* Top bar (identical across both Chat and Image Analysis pages) */}
+      <motion.div
+        style={{ opacity: isAnalyze ? 1 : bar }}
+        className="pointer-events-none fixed inset-x-0 top-0 z-30 h-14 border-b border-bone/10 bg-basalt/70 backdrop-blur-xl"
+      />
+
+      {/* Top-left docked DisasterRes logo */}
+      {isAnalyze ? (
+        <div
+          style={{
+            transform: `translate(${END_X}px, ${END_Y}px) scale(${END_SCALE})`,
+            transformOrigin: '0 0',
+          }}
+          className="fixed left-0 top-0 z-50 pointer-events-auto"
+        >
+          <button
+            onClick={() => setActiveDock('chat')}
+            className="cursor-pointer bg-transparent border-0 p-0 text-left block"
+            title="Click to return to Disaster Chat"
+          >
+            <Text3DFlip as="h1" className={HERO_CLASS} flipTextClassName="text-ember" staggerDuration={0.035}>
+              DisasterRes
+            </Text3DFlip>
+          </button>
+        </div>
+      ) : (
+        <motion.div style={{ x, y, scale, transformOrigin: '0 0' }} className="fixed left-0 top-0 z-50">
+          <Text3DFlip as="h1" className={HERO_CLASS} flipTextClassName="text-ember" staggerDuration={0.035}>
+            DisasterRes
+          </Text3DFlip>
+        </motion.div>
+      )}
+
+      {/* Top-right Live Telemetry Pill */}
       <div className="fixed right-6 top-4 z-40 flex items-center gap-2 font-mono text-[11px] uppercase tracking-[.22em] text-ash">
-        <span className={`h-2 w-2 animate-pulse rounded-full ${activeDock === 'sweep' ? 'bg-ember shadow-[0_0_10px_var(--color-ember)]' : 'bg-bone/60'}`} />
-        Live · {activeDock === 'sweep' ? 'Satellite sweep active' : 'Disaster desk 01'}
+        <span
+          className={`h-2 w-2 animate-pulse rounded-full ${
+            activeDock === 'sweep'
+              ? 'bg-ember shadow-[0_0_10px_var(--color-ember)]'
+              : isAnalyze
+              ? 'bg-ember shadow-[0_0_10px_var(--color-ember)]'
+              : 'bg-bone/60'
+          }`}
+        />
+        Live · {
+          activeDock === 'sweep'
+            ? 'Satellite sweep active'
+            : isAnalyze
+            ? 'Image Analysis Desk'
+            : 'Disaster desk 01'
+        }
       </div>
 
-      {/* the hero: fixed, driven by scroll */}
-      <motion.div style={{ x, y, scale, transformOrigin: '0 0' }} className="fixed left-0 top-0 z-50">
-        <Text3DFlip as="h1" className={HERO_CLASS} flipTextClassName="text-ember" staggerDuration={0.035}>
-          DisasterRes
-        </Text3DFlip>
-      </motion.div>
-
+      {isAnalyze ? (
+        <div className="relative z-10 pl-14 pr-4 sm:pl-20 sm:pr-6 pt-14 pb-20">
+          <ImageAnalysisDashboard
+            onImageClick={setLightbox}
+          />
+        </div>
+      ) : (
       <main className="relative z-10 mx-auto max-w-5xl px-6">
         {/* in-flow spacer for the hero; its text fades out as you scroll */}
         <section className="pt-24">
@@ -552,6 +600,7 @@ export default function App() {
           <div ref={endRef} className="h-4 w-full pointer-events-none" />
         </section>
       </main>
+      )}
 
       {upload > 0 && (
         <motion.div initial={{ opacity: 0, scale: .8 }} animate={{ opacity: 1, scale: 1 }}
@@ -561,10 +610,10 @@ export default function App() {
       )}
 
       <Dock
-        defaultActive={activeDock}
+        active={activeDock}
+        defaultActive="chat"
         onSelect={(id) => {
           setActiveDock(id);
-          if (id === 'upload') document.querySelector('input[type="file"]')?.click();
         }}
       />
 

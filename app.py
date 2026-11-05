@@ -6,7 +6,7 @@ import time
 from typing import TYPE_CHECKING
 
 import numpy as np
-from flask import Flask, Response, jsonify, render_template, request, stream_with_context
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory, stream_with_context
 from PIL import Image
 
 from utils.image_io import heatmap_overlay, image_to_data_url, resize_rgb_to_max_edge
@@ -184,6 +184,11 @@ def index():
 @app.route("/chat")
 def chat_page():
     return render_template("chat.html")
+
+
+@app.route("/presentation")
+def presentation_page():
+    return send_from_directory("docs", "disasterres_net_presentation.html")
 
 
 @app.route("/healthz")
