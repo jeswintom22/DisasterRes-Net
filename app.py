@@ -1,14 +1,19 @@
+from __future__ import annotations
+
 import io
 import os
 import time
+from typing import TYPE_CHECKING
 
 import numpy as np
 from flask import Flask, Response, jsonify, render_template, request, stream_with_context
 from PIL import Image
 
-from damage_assessment.localization import DamageLocalizationAnalyzer
-from models.hybrid_pipeline import HybridDisasterPipeline
 from utils.image_io import heatmap_overlay, image_to_data_url, resize_rgb_to_max_edge
+
+if TYPE_CHECKING:
+    from damage_assessment.localization import DamageLocalizationAnalyzer
+    from models.hybrid_pipeline import HybridDisasterPipeline
 
 app = Flask(__name__)
 MAX_UPLOAD_BYTES = int(os.getenv('DISASTERRES_MAX_UPLOAD_BYTES', str(32 * 1024 * 1024)))
@@ -27,7 +32,15 @@ def internal_server_error(error):
     return jsonify({"error": "Internal server error during analysis."}), 500
 
 _pipeline: HybridDisasterPipeline | None = None
-_damage_analyzer = DamageLocalizationAnalyzer()
+_damage_analyzer: DamageLocalizationAnalyzer | None = None
+
+
+def get_damage_analyzer() -> DamageLocalizationAnalyzer:
+    global _damage_analyzer
+    if _damage_analyzer is None:
+        from damage_assessment.localization import DamageLocalizationAnalyzer
+        _damage_analyzer = DamageLocalizationAnalyzer()
+    return _damage_analyzer
 
 
 DISASTER_DESCRIPTIONS = {
@@ -46,6 +59,7 @@ DISASTER_LABELS = ("earthquake", "flood", "hurricane", "wildfire", "landslide")
 def get_pipeline() -> HybridDisasterPipeline:
     global _pipeline
     if _pipeline is None:
+        from models.hybrid_pipeline import HybridDisasterPipeline
         _pipeline = HybridDisasterPipeline()
     return _pipeline
 
@@ -238,7 +252,7 @@ def predict():
         )
         disaster_label = disaster_context["label"]
         localization_backend = request.form.get("localization_backend", "provided")
-        assessment = _damage_analyzer.assess(
+        assessment = get_damage_analyzer().assess(
             analysis_rgb,
             analysis["saliency"].saliency_map,
             disaster_label,
@@ -289,4 +303,6 @@ def predict():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    port = int(os.getenv("PORT", "5000"))
+    print(f"Starting DisasterRes-Net server on http://127.0.0.1:{port} (Chat UI: http://127.0.0.1:{port}/chat)...", flush=True)
+    app.run(host="0.0.0.0", port=port)
