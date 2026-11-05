@@ -110,7 +110,7 @@ def run_disaster_crew(
     context: dict[str, Any] | None = None,
 ):
     _load_local_env()
-    normalized = "v3:" + " ".join(query.lower().split())
+    normalized = "v5:" + " ".join(query.lower().split())
     if image_data:
         normalized += ":upload"
     if satellite_mode:
@@ -360,11 +360,14 @@ def run_disaster_crew(
             downloader = ImageDownloaderTool()
             
             candidate_urls = []
-            if geo_info and geo_info.get("bbox"):
+            skip_image_scrape = bool(
+                temporal_notice or event.event_id.startswith("local-") or event.event_id == "rw-fallback"
+            )
+            if geo_info and geo_info.get("bbox") and not skip_image_scrape:
                 _emit(run, event_sink, "sources", "Trying Tier 1/3 spatial sources (NASA/Copernicus)...")
                 pass
                 
-            if not candidate_urls:
+            if not candidate_urls and not skip_image_scrape:
                 _emit(run, event_sink, "sources", "Querying Serper.dev API for latest imagery...")
                 candidate_urls = GoogleImageScrapeTool().run(
                     scout.location,
@@ -372,6 +375,8 @@ def run_disaster_crew(
                     satellite_mode=satellite_mode,
                     year=resolved.time_hint,
                 )
+            elif skip_image_scrape:
+                _emit(run, event_sink, "sources", "No matching authoritative event for requested period; skipping image scrape.")
                 
             _emit(run, event_sink, "sources", f"Found {len(candidate_urls)} candidate image URL(s)")
             max_evidence = int(os.getenv("DISASTERRES_MAX_EVIDENCE_IMAGES", "5"))

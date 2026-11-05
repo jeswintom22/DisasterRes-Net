@@ -52,6 +52,19 @@ class FactsBlock:
                 found.add(f"{float(value):.1f}")
                 found.add(f"{float(value):.2f}")
                 found.add(f"{float(value):.4f}")
+            elif isinstance(value, str):
+                import re
+                for tok in re.findall(r"\b\d+(?:\.\d+)?%?\b", value):
+                    clean = tok.rstrip("%")
+                    found.add(clean)
+                    found.add(tok)
+                    try:
+                        fval = float(clean)
+                        found.add(f"{fval:.0f}")
+                        found.add(f"{fval:.1f}")
+                        found.add(f"{fval:.2f}")
+                    except ValueError:
+                        pass
             elif isinstance(value, dict):
                 for item in value.values(): visit(item)
             elif isinstance(value, (list, tuple)): 

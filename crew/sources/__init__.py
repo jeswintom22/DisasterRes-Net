@@ -1,3 +1,5 @@
 from .reliefweb import ReliefWebSource
 from .gdacs import GDACSSource
-__all__ = ["ReliefWebSource", "GDACSSource"]
+from .wikipedia import WikipediaSource
+
+__all__ = ["ReliefWebSource", "GDACSSource", "WikipediaSource"]

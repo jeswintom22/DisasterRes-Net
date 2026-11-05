@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import date
 import re
 import httpx
@@ -52,8 +53,8 @@ def _rank_candidates(
 
 
 class ReliefWebSource:
-    url = "https://api.reliefweb.int/v1/disasters"
-    reports_url = "https://api.reliefweb.int/v1/reports"
+    url = "https://api.reliefweb.int/v2/disasters"
+    reports_url = "https://api.reliefweb.int/v2/reports"
 
     def search(
         self,
@@ -67,24 +68,24 @@ class ReliefWebSource:
         full_loc, eff_locality, eff_country = _decompose_location(location, locality, country)
         results: list[EventCandidate] = []
 
-        # Build query strings from most specific (locality) to broader (country) so national
-        # declarations like "India: Floods and Landslides - Jul 2024" are not missed when
-        # full_loc is "Wayanad, Kerala, India".
         query_terms: list[str] = []
         for term in (eff_locality, eff_country, full_loc):
             if term and term not in query_terms:
                 query_terms.append(term)
 
+        appname = os.getenv("RELIEFWEB_APPNAME", "DisasterRes-Net")
         seen_ids: set[str] = set()
         for q_term in query_terms:
             try:
+                full_q = f"{q_term} {time_hint}".strip() if time_hint else q_term
                 payload = {
-                    "query": {"value": q_term, "fields": ["name", "country.name"]},
+                    "query": {"value": full_q, "fields": ["name", "country.name"]},
                     "limit": 5,
                     "preset": "latest",
                 }
+                api_url = f"{self.url}?appname={appname}" if appname else self.url
                 response = httpx.post(
-                    self.url,
+                    api_url,
                     json=payload,
                     timeout=8,
                     headers={"User-Agent": "DisasterRes-Net/1.0"},
@@ -105,7 +106,7 @@ class ReliefWebSource:
                     results.append(
                         EventCandidate(
                             row_id,
-                             str(event_type).lower(),
+                            str(event_type).lower(),
                             str(fields.get("date", {}).get("created", ""))[:10],
                             str(fields.get("name", ""))[:1000],
                             ProvenanceRef(
@@ -124,6 +125,16 @@ class ReliefWebSource:
                 full_loc,
                 locality=eff_locality,
                 country=eff_country,
+                time_hint=time_hint,
+            )
+
+        if not results:
+            results = self._search_via_web_api(
+                full_loc,
+                locality=eff_locality,
+                country=eff_country,
+                hazard_hint=hazard_hint,
+                time_hint=time_hint,
             )
 
         return _rank_candidates(
@@ -140,19 +151,24 @@ class ReliefWebSource:
         *,
         locality: str | None = None,
         country: str | None = None,
+        time_hint: str | None = None,
     ) -> list[EventCandidate]:
         """Reports mention district-level locations that disaster titles often omit."""
         search_terms = [t for t in (locality, location, country) if t]
+        appname = os.getenv("RELIEFWEB_APPNAME", "DisasterRes-Net")
+        api_url = f"{self.reports_url}?appname={appname}" if appname else self.reports_url
+
         for term in search_terms:
             try:
+                full_q = f"{term} {time_hint}".strip() if time_hint else term
                 payload = {
-                    "query": {"value": term},
+                    "query": {"value": full_q},
                     "fields": {"include": ["title", "body", "date", "disaster", "url"]},
                     "limit": 3,
                     "sort": ["date:desc"],
                 }
                 response = httpx.post(
-                    self.reports_url,
+                    api_url,
                     json=payload,
                     timeout=10,
                     headers={"User-Agent": "DisasterRes-Net/1.0"},
@@ -187,6 +203,74 @@ class ReliefWebSource:
                     return candidates
             except (httpx.HTTPError, ValueError, KeyError, TypeError):
                 continue
+        return []
+
+    def _search_via_web_api(
+        self,
+        location: str,
+        *,
+        locality: str | None = None,
+        country: str | None = None,
+        hazard_hint: str | None = None,
+        time_hint: str | None = None,
+    ) -> list[EventCandidate]:
+        clean_loc = locality or location
+        q_parts = ["site:reliefweb.int/disaster OR site:reliefweb.int/report", clean_loc]
+        if hazard_hint:
+            q_parts.append(hazard_hint)
+        else:
+            q_parts.append("disaster")
+        if time_hint:
+            q_parts.append(time_hint)
+        query_str = " ".join(q_parts)
+
+        serper_key = os.getenv("SERPER_API_KEY")
+        if serper_key:
+            try:
+                res = httpx.post(
+                    "https://google.serper.dev/search",
+                    headers={"X-API-KEY": serper_key, "Content-Type": "application/json"},
+                    json={"q": query_str, "num": 5},
+                    timeout=8.0,
+                )
+                if res.status_code == 200:
+                    candidates = []
+                    for item in res.json().get("organic", []):
+                        title = str(item.get("title") or "").strip()
+                        link = str(item.get("link") or "").strip()
+                        snippet = str(item.get("snippet") or "").strip()
+                        desc = f"{title}. {snippet}"[:1200]
+                        etype = "disaster"
+                        for c_type in ("flood", "landslide", "earthquake", "cyclone", "wildfire"):
+                            if c_type in desc.lower():
+                                etype = c_type
+                                break
+                        row_id_m = re.search(r"/(?:disaster|report)/([\w-]+)", link)
+                        row_id = row_id_m.group(1) if row_id_m else f"rw-web-{abs(hash(link)) % 100000}"
+                        ev_date = ""
+                        date_str = item.get("date")
+                        if date_str:
+                            ev_date = str(date_str)
+                        if not ev_date:
+                            from .wikipedia import _extract_date_from_text
+                            ev_date = _extract_date_from_text(desc)
+                        if not ev_date and time_hint:
+                            y_m = re.search(r"\b(19\d{2}|20\d{2})\b", time_hint)
+                            if y_m:
+                                ev_date = y_m.group(1)
+                        candidates.append(
+                            EventCandidate(
+                                row_id,
+                                etype,
+                                ev_date,
+                                desc,
+                                ProvenanceRef("ReliefWeb", link),
+                            )
+                        )
+                    if candidates:
+                        return candidates
+            except Exception:
+                pass
         return []
 
     @staticmethod

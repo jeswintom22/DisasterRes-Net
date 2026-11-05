@@ -6,6 +6,7 @@ from typing import Any
 
 from crew.sources.reliefweb import ReliefWebSource
 from crew.sources.gdacs import GDACSSource
+from crew.sources.wikipedia import WikipediaSource
 from crew.sources.base import EventCandidate
 from .geocode import GeoLocation
 from .query import ResolvedQuery
@@ -35,18 +36,46 @@ def _score_event(
     score = 0.0
     text = f"{cand.event_type} {cand.description} {cand.event_date}".lower()
     if locality and locality.lower() in text:
-        score += 2.0
+        score += 3.0
     if country and country.lower() in text:
         score += 1.0
     if hazard_hint:
         h_low = hazard_hint.lower()
         if h_low in cand.event_type.lower() or h_low in text:
-            score += 2.0
+            score += 2.5
+    elif cand.event_type != "disaster":
+        # Specific peril inferred on open/discovery query
+        score += 1.5
     if time_hint:
-        year_m = re.search(r"\b(20\d{2})\b", time_hint)
+        year_m = re.search(r"\b(19\d{2}|20\d{2})\b", time_hint)
         if year_m and year_m.group(1) in text:
-            score += 1.5
+            score += 3.0
+    if len(cand.description) > 80:
+        score += 1.0
     return score
+
+
+def _is_temporally_compatible(cand: EventCandidate, time_hint: str | None) -> bool:
+    if not time_hint:
+        return True
+    req_y = re.search(r"\b(19\d{2}|20\d{2})\b", time_hint)
+    if not req_y:
+        return True
+    y_req = int(req_y.group(1))
+
+    cand_text = f"{cand.event_date} {cand.description}"
+    years_found = [int(y) for y in re.findall(r"\b(19\d{2}|20\d{2})\b", cand_text)]
+    if not years_found:
+        return True
+
+    if y_req in years_found:
+        return True
+
+    diffs = [abs(y - y_req) for y in years_found]
+    if min(diffs) > 0:
+        return False
+
+    return True
 
 
 def _call_source_search(
@@ -120,11 +149,29 @@ def find_events(
         lat=lat,
         lon=lon,
         hazard_hint=eff_hazard,
+        time_hint=eff_time,
         offline=offline,
     )
+    wiki_candidates = (
+        []
+        if offline
+        else _call_source_search(
+            WikipediaSource().search,
+            loc_str,
+            locality=locality,
+            country=country,
+            hazard_hint=eff_hazard,
+            time_hint=eff_time,
+            offline=offline,
+        )
+    )
 
-    combined = rw_candidates + gdacs_candidates
+    combined = rw_candidates + gdacs_candidates + wiki_candidates
     if not combined:
+        return []
+
+    valid_candidates = [c for c in combined if _is_temporally_compatible(c, eff_time)]
+    if not valid_candidates:
         return []
 
     scored = [
@@ -139,10 +186,26 @@ def find_events(
             -idx,
             c,
         )
-        for idx, c in enumerate(combined)
+        for idx, c in enumerate(valid_candidates)
     ]
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    return [c for _, _, c in scored]
+
+    results = [c for _, _, c in scored]
+    top = results[0]
+    if top.event_type == "disaster":
+        for other in results[1:]:
+            if other.event_type != "disaster" and (not eff_hazard or other.event_type == eff_hazard.lower()):
+                top = EventCandidate(
+                    event_id=top.event_id,
+                    event_type=other.event_type,
+                    event_date=top.event_date or other.event_date,
+                    description=top.description,
+                    source=top.source,
+                )
+                results[0] = top
+                break
+
+    return results
 
 
 def resolve_event(
