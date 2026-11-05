@@ -49,8 +49,8 @@ def _openai_narrate(facts: FactsBlock, fallback: str, sink: Callable[[dict[str, 
     facts_json = json.dumps({"event": facts.scout.event_description, "event_type": facts.scout.event_type, "date": facts.scout.event_date, "analysis": facts.analysis.__dict__, "disclaimer": facts.disclaimer}, ensure_ascii=False)
     prompt = ("Write a concise Markdown disaster situation report using ONLY the supplied JSON facts. "
               "Preserve every numeric value exactly, never invent casualties or facts, and include sections "
-              "Overview, Damage Assessment, Emergency Recommendations, Caveats, Sources, and Run ID. "
-              "If a metric is null, say it was unavailable. JSON facts:\n" + facts_json)
+              "with H3 headings: ### Overview, ### Damage Assessment, ### Emergency Recommendations, ### Caveats, ### Sources, and ### Run ID. "
+              "If a metric is null, say it was unavailable. Include 'No validated overhead imagery' if images_analysed is 0. JSON facts:\n" + facts_json)
     try:
         response = httpx.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": os.getenv("LLM_MODEL_NARRATE", "gpt-4o-mini"), "temperature": 0.1, "messages": [{"role": "system", "content": "You are a careful emergency communications writer."}, {"role": "user", "content": prompt}]}, timeout=30)
         response.raise_for_status()
@@ -93,11 +93,19 @@ def _call_resolve_event(resolved_query, geo_info=None):
     return resolve_event(resolved_query.location)
 
 
-def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Callable[[dict[str, Any]], None] | None = None, return_payload: bool = False):
+def run_disaster_crew(
+    query: str,
+    image_data: str | None = None,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
+    return_payload: bool = False,
+    satellite_mode: bool = False,
+):
     _load_local_env()
     normalized = "v3:" + " ".join(query.lower().split())
     if image_data:
         normalized += ":upload"
+    if satellite_mode:
+        normalized += ":sat"
     cached = cache_get(normalized)
     if cached:
         if event_sink:
@@ -298,8 +306,13 @@ def run_disaster_crew(query: str, image_data: str | None = None, event_sink: Cal
                 pass
                 
             if not candidate_urls:
-                _emit(run, event_sink, "sources", "Querying Serper.dev API for latest aerial imagery...")
-                candidate_urls = GoogleImageScrapeTool().run(scout.location, scout.event_type)
+                _emit(run, event_sink, "sources", "Querying Serper.dev API for latest imagery...")
+                candidate_urls = GoogleImageScrapeTool().run(
+                    scout.location,
+                    scout.event_type,
+                    satellite_mode=satellite_mode,
+                    year=resolved.time_hint,
+                )
                 
             _emit(run, event_sink, "sources", f"Found {len(candidate_urls)} candidate image URL(s)")
             max_evidence = int(os.getenv("DISASTERRES_MAX_EVIDENCE_IMAGES", "5"))

@@ -5,8 +5,25 @@ import httpx
 
 class GoogleImageScrapeTool:
     name = "image_search"
-    def run(self, location: str, event_type: str) -> list[str]:
-        q = f"{location} {event_type} aerial damage satellite"
+    def run(
+        self,
+        location: str,
+        event_type: str,
+        satellite_mode: bool = False,
+        year: str | None = None,
+    ) -> list[str]:
+        # Only append 'aerial damage satellite' if explicitly running in satellite sweep mode
+        parts = [location, event_type]
+        if year and str(year).strip():
+            y = str(year).strip()
+            if y not in location:
+                parts.append(y)
+        if satellite_mode:
+            parts.append("aerial damage satellite")
+        else:
+            parts.append("damage disaster")
+
+        q = " ".join(p for p in parts if p)
         all_urls = []
 
         # 1. Google Custom Search
@@ -58,41 +75,35 @@ class GoogleImageScrapeTool:
         try:
             url = "https://api.dataforseo.com/v3/serp/google/images/live/advanced"
             payload = [{"keyword": q, "language_code": "en", "location_code": 2840, "depth": 50}]
-            print(f"\n[DEBUG] [DataForSEO] POST {url}", flush=True)
-            res = httpx.post(url, headers={"Authorization": f"Basic {auth}"}, json=payload, timeout=12)
+            res = httpx.post(url, headers={"Authorization": f"Basic {auth}", "Content-Type": "application/json"}, json=payload, timeout=15)
             res.raise_for_status()
-            items = res.json().get("tasks", [])[0].get("result", [])[0].get("items", [])
-            images = [i.get("image_url") or i.get("source_url") for i in items if i.get("type") == "image"]
-            images = [img for img in images if img][:50]
-            print(f"[DEBUG] [DataForSEO] Found {len(images)} images.", flush=True)
+            data = res.json()
+            tasks = data.get("tasks", [])
+            images = []
+            if tasks and "result" in tasks[0] and tasks[0]["result"]:
+                items = tasks[0]["result"][0].get("items", [])
+                for item in items:
+                    if "source_url" in item:
+                        images.append(item["source_url"])
             return images
-        except Exception as e:
-            print(f"[DEBUG] [DataForSEO] Failed: {e}", flush=True)
+        except Exception:
             return []
 
     @staticmethod
     def _serper_images(q: str, key: str) -> list[str]:
         try:
-            url = "https://google.serper.dev/images"
-            print(f"\n[DEBUG] [Serper API] POST {url}", flush=True)
-            res = httpx.post(url, headers={'X-API-KEY': key, 'Content-Type': 'application/json'}, json={"q": q, "num": 50}, timeout=10)
+            res = httpx.post("https://google.serper.dev/images", headers={"X-API-KEY": key, "Content-Type": "application/json"}, json={"q": q, "num": 10}, timeout=10)
             res.raise_for_status()
-            images = [img["imageUrl"] for img in res.json().get("images", [])[:50] if img.get("imageUrl")]
-            print(f"[DEBUG] [Serper API] Found {len(images)} images.", flush=True)
-            return images
+            return [item["imageUrl"] for item in res.json().get("images", []) if item.get("imageUrl")]
         except Exception:
             return []
 
     @staticmethod
     def _serpapi_images(q: str, key: str) -> list[str]:
         try:
-            url = "https://serpapi.com/search"
-            print(f"\n[DEBUG] [SerpAPI] GET {url}", flush=True)
-            res = httpx.get(url, params={"engine": "google_images", "q": q, "api_key": key, "num": 50}, timeout=10)
+            res = httpx.get("https://serpapi.com/search.json", params={"engine": "google_images", "q": q, "api_key": key, "tbm": "isch"}, timeout=10)
             res.raise_for_status()
-            images = [img["original"] for img in res.json().get("images_results", [])[:50] if img.get("original")]
-            print(f"[DEBUG] [SerpAPI] Found {len(images)} images.", flush=True)
-            return images
+            return [item["original"] for item in res.json().get("images_results", []) if item.get("original")]
         except Exception:
             return []
 
@@ -119,7 +130,7 @@ class GoogleImageScrapeTool:
                     "iiprop": "url",
                     "format": "json"
                 },
-                headers={"User-Agent": "DisasterRes-Net/1.0 (christophermathai123@gmail.com)"},
+                headers={"User-Agent": "DisasterRes-Net/1.0 (academic research)"},
                 timeout=12
             )
             response.raise_for_status()
@@ -138,15 +149,16 @@ class GoogleImageScrapeTool:
     def _gdelt_images(location: str, event_type: str) -> list[str]:
         """Free, keyless fallback using GDELT news-image metadata."""
         try:
+            query = f"{location} {event_type}"
             response = httpx.get(
                 "https://api.gdeltproject.org/api/v2/doc/doc",
-                params={"query": f'"{location}" {event_type} disaster', "mode": "artlist", "maxrecords": 10, "format": "json", "sort": "HybridRel"},
-                timeout=12,
-                headers={"User-Agent": "DisasterRes-Net/1.0"},
+                params={"query": query, "mode": "artlist", "maxrecords": "5", "format": "json"},
+                headers={"User-Agent": "DisasterRes-Net/1.0 (academic research)"},
+                timeout=12
             )
             response.raise_for_status()
-            rows = response.json().get("articles", [])
-            return list(dict.fromkeys(row.get("socialimage") for row in rows if row.get("socialimage")))[:5]
-        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+            articles = response.json().get("articles", [])
+            images = [art.get("socialimage") for art in articles if art.get("socialimage")]
+            return images[:5]
+        except Exception:
             return []
-

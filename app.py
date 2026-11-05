@@ -196,12 +196,13 @@ def chat():
     data = request.get_json(silent=True) or {}
     query = str(data.get("query", "")).strip()
     image = data.get("image")
+    satellite_mode = bool(data.get("satellite_mode", False))
     if not query and not image:
         return jsonify({"error": "Empty query"}), 400
     if len(query) > 600:
         return jsonify({"error": "Query must be 600 characters or fewer"}), 400
     from crew.runner import start_job
-    job = start_job(query, image_data=image)
+    job = start_job(query, image_data=image, satellite_mode=satellite_mode)
     return jsonify({"job_id": job.id, "query": query}), 202
 
 

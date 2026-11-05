@@ -107,7 +107,7 @@ function Report({ msg, onImageClick }) {
 
   return (
     <div className="max-w-[88%] border-l-[3px] border-ember/80 bg-basalt-2/40 backdrop-blur-sm p-5 rounded-r-2xl shadow-[0_4px_24px_-8px_rgba(0,0,0,0.5)]">
-      {/* Top thumbnail row (like user uploaded preview cards) if gallery images exist */}
+      {/* Top thumbnail row if gallery images exist */}
       {galleryImages.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 mb-5 pb-4 border-b border-bone/10">
           {galleryImages.map((img, idx) => (
@@ -157,7 +157,10 @@ export default function App() {
   const [upload, setUpload] = useState(0);
   const [pendingUploads, setPendingUploads] = useState([]);
   const [lightbox, setLightbox] = useState(null);
+  const [activeDock, setActiveDock] = useState('chat');
   const [start, setStart] = useState({ x: 24, y: 120 });
+  const [pendingQueryWithoutYear, setPendingQueryWithoutYear] = useState(null);
+
   const placeholder = useRef(null);
   const endRef = useRef(null);
   const eventSourceRef = useRef(null);
@@ -226,14 +229,49 @@ export default function App() {
   // Any new message or status line while pinned keeps the view at the bottom.
   useEffect(() => { if (pinned.current) scrollBottom(); }, [messages, stage]);
 
-  /* ── real backend: POST /api/chat → SSE /api/chat/stream/:job ── */
-  const handleSend = async (query, imageUrls = null, base64 = null) => {
+  /* ── intelligent year clarifier & dispatch ── */
+  const handleSend = async (rawQuery, imageUrls = null, base64 = null, activeModes = []) => {
+    const query = (rawQuery || '').trim();
     const imagesArray = Array.isArray(imageUrls) ? imageUrls : (imageUrls ? [imageUrls] : []);
+    const isSatelliteMode = activeDock === 'sweep' || activeModes.includes('search');
+
+    // Check if the user is replying to a pending year clarification prompt
+    let finalQuery = query;
+    if (pendingQueryWithoutYear && !base64) {
+      const yearMatch = query.match(/\b(19\d{2}|20\d{2})\b/);
+      if (yearMatch) {
+        finalQuery = `${pendingQueryWithoutYear} in ${yearMatch[1]}`;
+      } else if (!/^(cancel|nevermind|no|skip)$/i.test(query)) {
+        finalQuery = `${pendingQueryWithoutYear} ${query}`;
+      } else {
+        finalQuery = pendingQueryWithoutYear;
+      }
+      setPendingQueryWithoutYear(null);
+    } else if (!base64 && query && !/\b(19\d{2}|20\d{2})\b/.test(query)) {
+      // Check if this looks like a disaster location query without a year specified
+      const hasLocationKeywords = /\b(in|at|near|around|damage|flood|landslide|earthquake|wildfire|cyclone|hurricane|disaster)\b/i.test(query);
+      const isNotSmalltalk = !/\b(hi|hello|hey|help|who are you|thanks)\b/i.test(query);
+      if (hasLocationKeywords && isNotSmalltalk) {
+        setMessages((m) => [
+          ...m,
+          { role: 'user', content: query, images: imagesArray },
+          {
+            role: 'ai',
+            stream: false,
+            content: `I found the location in your query, but disaster events often reoccur across different seasons and years. **Which year or date would you like me to inspect?** *(e.g., "2024", "July 2024", or reply "current")*`,
+          },
+        ]);
+        setPendingQueryWithoutYear(query);
+        toBottom();
+        return;
+      }
+    }
+
     setMessages((m) => [...m, { role: 'user', content: query, images: imagesArray }]);
     setStage({ label: 'Working', state: 'working', variant: 'gyro', detail: 'starting investigation' });
     toBottom();
 
-    let payload = { query };
+    let payload = { query: finalQuery, satellite_mode: isSatelliteMode };
     if (base64) payload.image = base64;
     const fail = (text) => {
       setStage(null);
@@ -320,8 +358,8 @@ export default function App() {
       <motion.div style={{ opacity: bar }}
         className="pointer-events-none fixed inset-x-0 top-0 z-30 h-14 border-b border-bone/10 bg-basalt/70 backdrop-blur-xl" />
       <div className="fixed right-6 top-4 z-40 flex items-center gap-2 font-mono text-[11px] uppercase tracking-[.22em] text-ash">
-        <span className="h-2 w-2 animate-pulse rounded-full bg-ember shadow-[0_0_10px_var(--color-ember)]" />
-        Live · Sweep desk 01
+        <span className={`h-2 w-2 animate-pulse rounded-full ${activeDock === 'sweep' ? 'bg-ember shadow-[0_0_10px_var(--color-ember)]' : 'bg-bone/60'}`} />
+        Live · {activeDock === 'sweep' ? 'Satellite sweep active' : 'Disaster desk 01'}
       </div>
 
       {/* the hero: fixed, driven by scroll */}
@@ -347,12 +385,12 @@ export default function App() {
         <motion.div layout transition={{ type: 'spring', stiffness: 120, damping: 22 }} className={hasChat ? "fixed inset-x-0 bottom-8 z-40 px-6" : "relative mt-2 mb-12 z-40"}>
           <div className="mx-auto max-w-3xl">
             <AIPromptBox 
-              onSubmit={(q) => {
+              onSubmit={(q, modes) => {
                 if (!q.trim() && pendingUploads.length === 0) return;
                 const urls = pendingUploads.map(p => p.url);
                 // Send primary base64 image (first) to backend for pipeline analysis
                 const primaryB64 = pendingUploads.length > 0 ? pendingUploads[0].base64 : null;
-                handleSend(q || 'Analyze this imagery', urls, primaryB64);
+                handleSend(q || 'Analyze this imagery', urls, primaryB64, modes);
                 setPendingUploads([]);
               }} 
               onAttach={handleUpload} 
@@ -422,7 +460,13 @@ export default function App() {
         </motion.div>
       )}
 
-      <Dock onSelect={(id) => id === 'upload' && document.querySelector('input[type="file"]')?.click()} />
+      <Dock
+        defaultActive={activeDock}
+        onSelect={(id) => {
+          setActiveDock(id);
+          if (id === 'upload') document.querySelector('input[type="file"]')?.click();
+        }}
+      />
 
       <AnimatePresence>
         {lightbox && (
