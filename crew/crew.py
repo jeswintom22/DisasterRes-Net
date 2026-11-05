@@ -55,7 +55,12 @@ def _openai_narrate(facts: FactsBlock, fallback: str, sink: Callable[[dict[str, 
     try:
         response = httpx.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": os.getenv("LLM_MODEL_NARRATE", "gpt-4o-mini"), "temperature": 0.1, "messages": [{"role": "system", "content": "You are a careful emergency communications writer."}, {"role": "user", "content": prompt}]}, timeout=30)
         response.raise_for_status()
-        text = response.json()["choices"][0]["message"]["content"].strip()
+        raw_text = response.json()["choices"][0]["message"]["content"].strip()
+        # Thoroughly strip wrapping or stray code fences emitted by LLMs
+        import re
+        text = re.sub(r"^[ \t]*```[a-zA-Z0-9_-]*[ \t]*\r?\n?", "", raw_text, flags=re.MULTILINE)
+        text = re.sub(r"\r?\n?[ \t]*```[ \t]*$", "", text, flags=re.MULTILINE)
+        text = re.sub(r"```", "", text).strip()
         if not NumericFidelityValidator().validate(text, facts):
             _emit(run, sink, "narration", "OpenAI response failed numeric validation; using deterministic report")
             return fallback, "deterministic (validation fallback)"
@@ -362,6 +367,11 @@ def run_disaster_crew(
         facts = FactsBlock(run.run_id, scout, analysis_result)
         deterministic_response = render_report(facts)
         response, narration_mode = _openai_narrate(facts, deterministic_response, event_sink, run)
+        # Ensure no residual code fences remain in narration
+        import re
+        response = re.sub(r"^[ \t]*```[a-zA-Z0-9_-]*[ \t]*\r?\n?", "", response, flags=re.MULTILINE)
+        response = re.sub(r"\r?\n?[ \t]*```[ \t]*$", "", response, flags=re.MULTILINE)
+        response = re.sub(r"```", "", response).strip()
         
         if accepted_urls and not image_data:
             images_md = "\n\n### Analysed Satellite Imagery\n" + "\n".join(

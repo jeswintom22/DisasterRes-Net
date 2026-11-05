@@ -59,12 +59,11 @@ function formatReportContent(content = '') {
     .replace(/\|\s*Date:\s*unknown/gi, `| Date: ${now}`)
     .replace(/Confidence:\s*Low/gi, 'Confidence: Verified');
 
-  // Strip wrapping markdown code blocks (e.g. ```markdown ... ```) if emitted by LLMs
-  cleaned = cleaned.trim();
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
-  }
-  return cleaned;
+  // Strip ALL markdown code block fences (e.g. ```markdown ... ```) emitted by LLMs
+  cleaned = cleaned.replace(/^[ \t]*```[a-zA-Z0-9_-]*[ \t]*\r?\n?/gm, '');
+  cleaned = cleaned.replace(/\r?\n?[ \t]*```[ \t]*$/gm, '');
+  cleaned = cleaned.replace(/```/g, '');
+  return cleaned.trim();
 }
 
 /** Extract markdown images out of markdown text so they can be rendered as top-level thumbnail strip */
@@ -76,7 +75,11 @@ function parseReportImages(markdownText = '') {
   while ((match = imgRegex.exec(markdownText)) !== null) {
     images.push({ alt: match[1] || 'Evidence Image', url: match[2] });
   }
-  cleanText = cleanText.replace(imgRegex, '').replace(/###\s*Analysed Satellite Imagery\s*/gi, '').trim();
+  cleanText = cleanText
+    .replace(imgRegex, '')
+    .replace(/###\s*Analysed Satellite Imagery\s*/gi, '')
+    .replace(/```/g, '')
+    .trim();
   return { images, cleanText };
 }
 
@@ -84,7 +87,7 @@ function Report({ msg, onImageClick }) {
   const rawContent = formatReportContent(msg.content || '');
   const { images: inlineImages, cleanText } = useMemo(() => parseReportImages(rawContent), [rawContent]);
   const { visible, streaming } = useTokenStream(cleanText, !!msg.stream);
-  const html = DOMPurify.sanitize(marked.parse(visible));
+  const html = DOMPurify.sanitize(marked.parse(visible, { breaks: true, gfm: true }));
   const f = msg.facts || {};
 
   // Combine inline markdown images with any raw visualizations or single result image
@@ -113,7 +116,7 @@ function Report({ msg, onImageClick }) {
   };
 
   return (
-    <div className="max-w-[88%] border-l-[3px] border-ember/80 bg-basalt-2/40 backdrop-blur-sm p-5 rounded-r-2xl shadow-[0_4px_24px_-8px_rgba(0,0,0,0.5)]">
+    <div className="w-full max-w-[88%] min-w-0 overflow-hidden break-words border-l-[3px] border-ember/80 bg-basalt-2/40 backdrop-blur-sm p-5 rounded-r-2xl shadow-[0_4px_24px_-8px_rgba(0,0,0,0.5)]">
       {/* Top thumbnail row if gallery images exist */}
       {galleryImages.length > 0 && (
         <div className="flex flex-wrap items-center gap-3 mb-5 pb-4 border-b border-bone/10">
@@ -141,7 +144,7 @@ function Report({ msg, onImageClick }) {
 
       {/* Narrative Report Content */}
       <div
-        className="md prose prose-invert prose-p:leading-relaxed prose-pre:bg-basalt-3"
+        className="md prose prose-invert max-w-none min-w-0 break-words overflow-wrap-anywhere prose-p:leading-relaxed prose-pre:bg-basalt-3"
         dangerouslySetInnerHTML={{ __html: html }}
         onClick={handleContainerClick}
       />
@@ -419,9 +422,9 @@ export default function App() {
           )}
           {messages.map((msg, i) => (
             <motion.div key={i} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              className={`flex w-full min-w-0 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               {msg.role === 'user' && (
-                <div className="flex flex-col items-end gap-2.5">
+                <div className="flex flex-col items-end gap-2.5 max-w-[85%] min-w-0">
                   {/* Clean row of rounded preview tiles for user uploaded images */}
                   {msg.images && msg.images.length > 0 && (
                     <div className="flex flex-wrap items-center justify-end gap-2.5">
@@ -442,13 +445,13 @@ export default function App() {
                     </div>
                   )}
                   {msg.content && (
-                    <div className="max-w-[80%] rounded-2xl rounded-br-[4px] bg-bone/90 backdrop-blur pl-4 pr-6 py-2.5 text-[15px] leading-snug text-basalt shadow-sm text-left">{msg.content}</div>
+                    <div className="w-auto max-w-full min-w-0 break-words rounded-2xl rounded-br-[4px] bg-bone/90 backdrop-blur pl-4 pr-6 py-2.5 text-[15px] leading-snug text-basalt shadow-sm text-left">{msg.content}</div>
                   )}
                 </div>
               )}
               {msg.role === 'ai' && <Report msg={msg} onImageClick={setLightbox} />}
               {msg.role === 'error' && (
-                <div className="max-w-[80%] rounded-2xl bg-ember/10 px-5 py-3 font-mono text-sm text-ember-soft ring-1 ring-ember/40">{msg.content}</div>
+                <div className="max-w-[80%] min-w-0 break-words rounded-2xl bg-ember/10 px-5 py-3 font-mono text-sm text-ember-soft ring-1 ring-ember/40">{msg.content}</div>
               )}
             </motion.div>
           ))}

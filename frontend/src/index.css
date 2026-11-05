@@ -74,39 +74,97 @@ body {
 .scrollbar-thin::-webkit-scrollbar-thumb { background: rgba(239, 230, 211, .15); border-radius: 9px; }
 
 /* Rendered markdown report */
-.md { font-size: 16.5px; line-height: 1.7; color: var(--color-bone); }
+.md {
+  font-size: 16.5px;
+  line-height: 1.7;
+  color: var(--color-bone);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  word-wrap: break-word;
+  max-width: 100%;
+  min-width: 0;
+}
 .md > *:first-child { margin-top: 0; }
-.md h1, .md h2, .md h3 { font-family: var(--font-serif); font-weight: 400; line-height: 1.15; margin: 1.6em 0 .5em; color: var(--color-bone); }
+.md h1, .md h2, .md h3 {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  line-height: 1.15;
+  margin: 1.6em 0 .5em;
+  color: var(--color-bone);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .md h1 { font-size: 2.1rem; } .md h2 { font-size: 1.7rem; color: var(--color-ember-soft); } .md h3 { font-size: 1.3rem; }
-.md p { margin: .7em 0; color: rgba(239,230,211,.88); }
+.md p {
+  margin: .7em 0;
+  color: rgba(239,230,211,.88);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 .md strong { color: var(--color-bone); font-weight: 650; }
-.md ul, .md ol { margin: .7em 0; padding-left: 1.3em; }
-.md li { margin: .3em 0; } .md li::marker { color: var(--color-ember); }
-.md a { color: var(--color-ember-soft); text-decoration: underline; text-underline-offset: 3px; }
-.md blockquote { margin: 1em 0; padding-left: 1em; border-left: 2px solid rgba(239,230,211,.2); color: var(--color-ash); font-family: var(--font-serif); font-size: 1.15em; }
-.md code { font-family: var(--font-mono); font-size: .85em; background: var(--color-basalt-3); padding: .1em .4em; border-radius: 6px; }
-.md table { width: 100%; border-collapse: collapse; margin: 1.2em 0; font-size: .92em; }
+.md ul, .md ol { margin: .7em 0; padding-left: 1.3em; max-width: 100%; }
+.md li {
+  margin: .3em 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.md li::marker { color: var(--color-ember); }
+.md a { color: var(--color-ember-soft); text-decoration: underline; text-underline-offset: 3px; word-break: break-all; }
+.md blockquote {
+  margin: 1em 0;
+  padding-left: 1em;
+  border-left: 2px solid rgba(239,230,211,.2);
+  color: var(--color-ash);
+  font-family: var(--font-serif);
+  font-size: 1.15em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.md code {
+  font-family: var(--font-mono);
+  font-size: .85em;
+  background: var(--color-basalt-3);
+  padding: .1em .4em;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.md table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.2em 0;
+  font-size: .92em;
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
 .md th { text-align: left; font-family: var(--font-mono); font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--color-ash); font-weight: 500; }
 .md th, .md td { padding: .55em .8em; border-bottom: 1px solid rgba(239,230,211,.1); }
 .md tr:hover td { background: rgba(255,90,31,.05); }
 .md hr { border: 0; border-top: 1px solid rgba(239,230,211,.12); margin: 1.8em 0; }
 
 /* Clean pre/code blocks inside markdown so any code blocks wrap text and never clip */
-.md pre {
-  background: var(--color-basalt-3);
-  padding: 1rem 1.25rem;
-  border-radius: 12px;
-  border: 1px solid rgba(239, 230, 211, 0.1);
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
+.md pre, .prose pre, pre {
+  background: var(--color-basalt-3) !important;
+  padding: 1rem 1.25rem !important;
+  border-radius: 12px !important;
+  border: 1px solid rgba(239, 230, 211, 0.1) !important;
+  overflow-x: auto !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
 }
-.md pre code {
-  background: transparent;
-  padding: 0;
-  border-radius: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
+.md pre code, .prose pre code, pre code {
+  background: transparent !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
 }
 
 /* Markdown inline images styled as modern rounded preview tiles */
