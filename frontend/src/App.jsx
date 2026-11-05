@@ -9,6 +9,35 @@ import { Dock } from './components/Dock';
 import { Text3DFlip } from './components/Text3DFlip';
 import { AIPromptBox } from './components/AIPromptBox';
 
+marked.use({
+  breaks: true,
+  gfm: true,
+  hooks: {
+    preprocess(markdown) {
+      if (!markdown) return '';
+      let text = markdown
+        .replace(/^[ \t]*```[a-zA-Z0-9_-]*[ \t]*\r?\n?/gm, '')
+        .replace(/\r?\n?[ \t]*```[ \t]*$/gm, '')
+        .replace(/```/g, '');
+      text = text.replace(/^`([#*\->\w].*?)`$/gm, '$1');
+      const lines = text.split('\n');
+      let minIndent = Infinity;
+      for (const line of lines) {
+        if (line.trim().length === 0) continue;
+        const match = line.match(/^[ ]+/);
+        const indent = match ? match[0].length : 0;
+        if (indent < minIndent) minIndent = indent;
+      }
+      if (minIndent > 0 && minIndent !== Infinity) {
+        text = lines.map(line => line.slice(minIndent)).join('\n');
+      }
+      text = text.replace(/^[ \t]+(?=[#*\->\d\.])/gm, '');
+      text = text.replace(/^[ ]{4}/gm, '');
+      return text;
+    }
+  }
+});
+
 const HERO_CLASS =
   'text-[clamp(3.5rem,13vw,10.5rem)] font-extrabold leading-[.88] tracking-[-0.045em] text-bone whitespace-nowrap';
 const SHRINK_RANGE = 320; // px of scroll over which the hero travels to the corner
@@ -59,10 +88,26 @@ function formatReportContent(content = '') {
     .replace(/\|\s*Date:\s*unknown/gi, `| Date: ${now}`)
     .replace(/Confidence:\s*Low/gi, 'Confidence: Verified');
 
-  // Strip ALL markdown code block fences (e.g. ```markdown ... ```) emitted by LLMs
+  // Strip ALL markdown code block fences emitted by LLMs
   cleaned = cleaned.replace(/^[ \t]*```[a-zA-Z0-9_-]*[ \t]*\r?\n?/gm, '');
   cleaned = cleaned.replace(/\r?\n?[ \t]*```[ \t]*$/gm, '');
   cleaned = cleaned.replace(/```/g, '');
+  cleaned = cleaned.replace(/^`([#*\->\w].*?)`$/gm, '$1');
+
+  // Dedent lines to prevent unintended indented code blocks (<pre><code>)
+  const lines = cleaned.split('\n');
+  let minIndent = Infinity;
+  for (const line of lines) {
+    if (line.trim().length === 0) continue;
+    const match = line.match(/^[ ]+/);
+    const indent = match ? match[0].length : 0;
+    if (indent < minIndent) minIndent = indent;
+  }
+  if (minIndent > 0 && minIndent !== Infinity) {
+    cleaned = lines.map(line => line.slice(minIndent)).join('\n');
+  }
+  cleaned = cleaned.replace(/^[ \t]+(?=[#*\->\d\.])/gm, '');
+  cleaned = cleaned.replace(/^[ ]{4}/gm, '');
   return cleaned.trim();
 }
 
@@ -144,7 +189,7 @@ function Report({ msg, onImageClick }) {
 
       {/* Narrative Report Content */}
       <div
-        className="md prose prose-invert max-w-none min-w-0 break-words overflow-wrap-anywhere prose-p:leading-relaxed prose-pre:bg-basalt-3"
+        className="md w-full min-w-0 max-w-full break-words"
         dangerouslySetInnerHTML={{ __html: html }}
         onClick={handleContainerClick}
       />
@@ -438,7 +483,7 @@ export default function App() {
         </motion.div>
 
         {/* transcript */}
-        <section className="min-h-[70vh] space-y-8 pt-10">
+        <section className="min-h-[70vh] space-y-8 pt-10 pb-56">
           {messages.length === 0 && !stage && (
             <motion.p style={{ opacity: fade }} className="font-mono text-xs uppercase tracking-[.2em] text-ash/60">
               — awaiting coordinates —
@@ -484,7 +529,7 @@ export default function App() {
               <ThinkingOrbs {...stage} />
             </motion.div>
           )}
-          <div ref={endRef} />
+          <div ref={endRef} className="h-44 w-full pointer-events-none" />
         </section>
       </main>
 

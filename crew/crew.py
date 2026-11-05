@@ -49,8 +49,10 @@ def _openai_narrate(facts: FactsBlock, fallback: str, sink: Callable[[dict[str, 
     facts_json = json.dumps({"event": facts.scout.event_description, "event_type": facts.scout.event_type, "date": facts.scout.event_date, "analysis": facts.analysis.__dict__, "disclaimer": facts.disclaimer}, ensure_ascii=False)
     prompt = ("Write a concise Markdown disaster situation report using ONLY the supplied JSON facts. "
               "Do NOT wrap the entire response in triple backticks or ```markdown code blocks; output raw Markdown text directly. "
+              "Do NOT indent your response or lines with spaces or tabs. "
               "Preserve every numeric value exactly, never invent casualties or facts, and include sections "
               "with H3 headings: ### Overview, ### Damage Assessment, ### Emergency Recommendations, ### Caveats, ### Sources, and ### Run ID. "
+              "CRITICAL: If the 'event' field or disclaimer contains a [CRITICAL NOTICE] stating that no disaster record was found for the requested time/month/year, you MUST explicitly state this as the FIRST sentence of ### Overview (e.g. 'No authoritative flood record was found for July 2026 in Türkiye.'). "
               "If a metric is null, say it was unavailable. Include 'No validated overhead imagery' if images_analysed is 0. JSON facts:\n" + facts_json)
     try:
         response = httpx.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": os.getenv("LLM_MODEL_NARRATE", "gpt-4o-mini"), "temperature": 0.1, "messages": [{"role": "system", "content": "You are a careful emergency communications writer."}, {"role": "user", "content": prompt}]}, timeout=30)
@@ -297,27 +299,60 @@ def run_disaster_crew(
             _emit(run, event_sink, "resolve", f"Resolving event near {resolved.location}")
             event = _call_resolve_event(resolved, geo_info=geo_info)
 
-            # Check if user specified a year/time and the found event date does not match
+            # Check if user specified a year/month/time and the found event date does not match
+            temporal_notice: str | None = None
             if resolved.time_hint:
                 import re
+                _MONTH_MAP = {
+                    "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+                    "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+                    "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9, "october": 10,
+                    "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12,
+                }
+                def _get_m(s: str) -> int | None:
+                    if not s:
+                        return None
+                    low = s.lower()
+                    for name, num in _MONTH_MAP.items():
+                        if re.search(r"\b" + name + r"\b", low):
+                            return num
+                    m_iso = re.search(r"\b(?:19|20)\d{2}-(\d{1,2})-\d{1,2}\b", s)
+                    if m_iso:
+                        return int(m_iso.group(1))
+                    m_slash = re.search(r"\b\d{1,2}/(\d{1,2})/(?:19|20)\d{2}\b", s)
+                    if m_slash:
+                        return int(m_slash.group(1))
+                    return None
+
                 req_y = re.search(r"\b(19\d{2}|20\d{2})\b", resolved.time_hint)
                 ev_y = re.search(r"\b(19\d{2}|20\d{2})\b", event.event_date or "")
-                if req_y and ev_y and req_y.group(1) != ev_y.group(1):
-                    extra_caveats.append(
-                        f"Temporal notice: No authoritative disaster record was found specifically for {resolved.time_hint} in {resolved.location}. "
-                        f"Nearest active alert shown is from {event.event_date}."
+                req_m = _get_m(resolved.time_hint)
+                ev_m = _get_m(event.event_date or "") or _get_m(event.description or "")
+
+                year_mismatch = bool(req_y and ev_y and (req_y.group(1) != ev_y.group(1)))
+                month_mismatch = bool(req_m and ev_m and (req_m != ev_m))
+
+                if year_mismatch or month_mismatch:
+                    temporal_notice = (
+                        f"No authoritative {resolved.hazard_hint or 'disaster'} record was found specifically for {resolved.time_hint} in {resolved.location}. "
+                        f"The nearest active alert on record occurred from {event.event_date or 'another period'}."
                     )
+                    extra_caveats.append(f"Temporal notice: {temporal_notice}")
                 elif req_y and not ev_y:
                     extra_caveats.append(
                         f"Temporal notice: Checked databases for events during {resolved.time_hint} in {resolved.location}."
                     )
+
+            event_desc = event.description or ""
+            if temporal_notice:
+                event_desc = f"[CRITICAL NOTICE: {temporal_notice}] " + event_desc
 
             scout = ScoutResult(
                 resolved.location,
                 event.event_id,
                 event.event_type,
                 event.event_date or "unknown",
-                event.description,
+                event_desc,
                 sources=[event.source],
                 degraded_sources=[],
                 resolution_method=resolved.resolution_method,
