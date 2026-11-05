@@ -256,34 +256,54 @@ export default function App() {
     return () => window.removeEventListener('resize', measure);
   }, []);
 
-  /* ── pin to bottom while chatting; releases if the user scrolls up, re-pins near the bottom ── */
-  const pinned = useRef(false);
-  const scrollBottom = () => {
-    const top = document.documentElement.scrollHeight;
-    if (lenis.current) lenis.current.scrollTo(top, { immediate: true, force: true });
-    else window.scrollTo({ top, behavior: 'auto' });
+  /* ── pin to bottom while chatting; releases smoothly when user scrolls up ── */
+  const pinned = useRef(true);
+  const toBottom = (smooth = true) => {
+    if (!endRef.current) return;
+    if (lenis.current) {
+      lenis.current.scrollTo(endRef.current, { offset: 0, immediate: !smooth });
+    } else {
+      endRef.current.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
+    }
   };
-  const toBottom = () => { pinned.current = true; scrollBottom(); };
 
   useEffect(() => {
-    const gap = () => document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
-    const onScroll = () => { if (gap() < 140) pinned.current = true; };
-    const onUserUp = (e) => { if (e.deltaY < 0 || e.type === 'touchmove') { if (gap() > 140) pinned.current = false; } };
-    const ro = new ResizeObserver(() => { if (pinned.current) scrollBottom(); });
-    ro.observe(document.body);
+    const onWheel = (e) => {
+      // If user scrolls up, immediately release lock so user has complete scroll freedom
+      if (e.deltaY < 0) {
+        pinned.current = false;
+      } else if (e.deltaY > 0) {
+        // If user scrolls back down near the bottom, re-engage pinning
+        const gap = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+        if (gap < 80) pinned.current = true;
+      }
+    };
+    const onTouch = () => {
+      pinned.current = false;
+    };
+    const onScroll = () => {
+      const gap = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+      if (gap < 80) {
+        pinned.current = true;
+      }
+    };
+
+    window.addEventListener('wheel', onWheel, { passive: true });
+    window.addEventListener('touchmove', onTouch, { passive: true });
     window.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('wheel', onUserUp, { passive: true });
-    window.addEventListener('touchmove', onUserUp, { passive: true });
     return () => {
-      ro.disconnect();
+      window.removeEventListener('wheel', onWheel);
+      window.removeEventListener('touchmove', onTouch);
       window.removeEventListener('scroll', onScroll);
-      window.removeEventListener('wheel', onUserUp);
-      window.removeEventListener('touchmove', onUserUp);
     };
   }, []);
 
-  // Any new message or status line while pinned keeps the view at the bottom.
-  useEffect(() => { if (pinned.current) scrollBottom(); }, [messages, stage]);
+  // When messages or stage change, smoothly bring into view ONLY if pinned
+  useEffect(() => {
+    if (pinned.current) {
+      toBottom(true);
+    }
+  }, [messages.length, stage]);
 
   /* ── intelligent year clarifier & dispatch ── */
   const handleSend = async (rawQuery, imageUrls = null, base64 = null, activeModes = []) => {
@@ -483,7 +503,7 @@ export default function App() {
         </motion.div>
 
         {/* transcript */}
-        <section className="min-h-[70vh] space-y-8 pt-10 pb-56">
+        <section className="min-h-[70vh] space-y-8 pt-10 pb-32">
           {messages.length === 0 && !stage && (
             <motion.p style={{ opacity: fade }} className="font-mono text-xs uppercase tracking-[.2em] text-ash/60">
               — awaiting coordinates —
@@ -529,7 +549,7 @@ export default function App() {
               <ThinkingOrbs {...stage} />
             </motion.div>
           )}
-          <div ref={endRef} className="h-44 w-full pointer-events-none" />
+          <div ref={endRef} className="h-4 w-full pointer-events-none" />
         </section>
       </main>
 
