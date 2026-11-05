@@ -9,6 +9,10 @@ export default defineConfig({
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
   server: {
+    watch: {
+      usePolling: true,
+      interval: 150,
+    },
     // Flask backend (app.py, port 5000): chat jobs + SSE progress stream.
     proxy: { '/api': { target: 'http://127.0.0.1:5000', changeOrigin: true } },
   },
