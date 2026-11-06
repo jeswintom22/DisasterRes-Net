@@ -273,43 +273,88 @@
       </div>
     </section>
 
-<!-- ================= SLIDE 2: Problem Statement ================= -->
+    <!-- ================= SLIDE 2: Problem Statement ================= -->
     <section class="slide" data-slide="2" data-title="01 · Introduction &amp; Research Gaps">
       <div class="max-w-5xl">
-        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">01 · INTRODUCTION &amp; RESEARCH Gaps</span>
-        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-8">
+        <!-- Badge -->
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-1">01 · INTRODUCTION &amp; RESEARCH GAPS</span>
+        
+        <!-- Main Heading -->
+        <h2 class="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-bone tracking-tight mb-2">
           The Information Bottleneck in Emergency Operations
         </h2>
+        
+        <!-- Descriptive Bridge Paragraph -->
+        <p class="text-xs sm:text-sm text-ash max-w-4xl leading-relaxed mb-6 font-normal">
+          In catastrophic disasters, rescue operations face a critical <strong class="text-bone">24-hour golden window</strong> where survival odds drop exponentially. While citizens and drones upload thousands of ground-level crisis photos every hour, <strong class="text-ember-soft">manual inspection takes 4–8 hours per sector</strong>. Meanwhile, off-the-shelf computer vision algorithms fail first responders due to three fundamental vulnerabilities:
+        </p>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div class="slide-card p-6 border-t-2 border-t-red-500">
-            <span class="font-mono text-xs text-red-400 font-bold uppercase block mb-3">Skew &gt; 90:1</span>
-            <h3 class="text-xl font-bold text-bone mb-2">Minority Hazard Blindness</h3>
-            <p class="text-xs sm:text-sm text-ash leading-relaxed">
-              Social imagery is dominated by non-disaster posts and frequent hurricanes. Critical rare perils like landslides (490 scenes) and floods (1,303) are silenced, yielding an unacceptable 2.08% baseline flood recall.
-            </p>
+        <!-- 3 Problem Breakdown Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
+          <!-- Card 1: Class Imbalance -->
+          <div class="slide-card p-5 border-t-2 border-t-red-500 flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="font-mono text-[11px] px-2 py-0.5 rounded bg-red-950/40 border border-red-500/30 text-red-400 font-bold uppercase">Data Skew &gt; 90:1</span>
+                <span class="text-muted text-xs font-mono">Gap 01</span>
+              </div>
+              <h3 class="text-lg font-bold text-bone mb-2">Minority Hazard Blindness</h3>
+              <p class="text-xs text-ash leading-relaxed mb-3">
+                <strong class="text-bone">Why it occurs:</strong> Datasets are flooded with harmless photos and frequent hurricanes. Standard models optimize for naive accuracy by always predicting the majority class.
+              </p>
+              <div class="p-2.5 rounded bg-basalt border border-red-500/20 font-mono text-[11px] text-red-300">
+                <span class="text-ash block text-[10px] uppercase">Operational Danger:</span>
+                Near-zero sensitivity: Baseline models yielded <strong class="text-red-400">2.08% flood recall</strong> and <strong class="text-red-400">7.14% landslide recall</strong>, completely abandoning trapped victims.
+              </div>
+            </div>
           </div>
 
-          <div class="slide-card p-6 border-t-2 border-t-ember">
-            <span class="font-mono text-xs text-ember font-bold uppercase block mb-3">ECE &gt; 14%</span>
-            <h3 class="text-xl font-bold text-bone mb-2">Uncalibrated Overconfidence</h3>
-            <p class="text-xs sm:text-sm text-ash leading-relaxed">
-              Standard deep neural networks output high confidence (90%+) on incorrect or ambiguous scenes. Classifiers lack temperature scaling, giving emergency dispatchers false certainty on blurry boundaries.
-            </p>
+          <!-- Card 2: Overconfidence -->
+          <div class="slide-card p-5 border-t-2 border-t-ember flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="font-mono text-[11px] px-2 py-0.5 rounded bg-ember/15 border border-ember/30 text-ember-soft font-bold uppercase">ECE &gt; 14%</span>
+                <span class="text-muted text-xs font-mono">Gap 02</span>
+              </div>
+              <h3 class="text-lg font-bold text-bone mb-2">Uncalibrated Overconfidence</h3>
+              <p class="text-xs text-ash leading-relaxed mb-3">
+                <strong class="text-bone">Why it occurs:</strong> Deep neural networks output uncalibrated softmax scores. Models report 90%+ certainty even on blurry, mislabeled, or misleading scenes.
+              </p>
+              <div class="p-2.5 rounded bg-basalt border border-ember/20 font-mono text-[11px] text-ember-soft">
+                <span class="text-ash block text-[10px] uppercase">Operational Danger:</span>
+                False certainty: Commanders waste limited helicopters and rescue boats on false alarms based on uncalibrated algorithmic overconfidence.
+              </div>
+            </div>
           </div>
 
-          <div class="slide-card p-6 border-t-2 border-t-gold">
-            <span class="font-mono text-xs text-gold font-bold uppercase block mb-3">Zero Localization</span>
-            <h3 class="text-xl font-bold text-bone mb-2">Spatial Blindness</h3>
-            <p class="text-xs sm:text-sm text-ash leading-relaxed">
-              Image-level labels fail to specify where damage is located. First responders need exact polygon boundaries, affected area footprints, and contiguous rubble centroids to route tactical rescue gear.
-            </p>
+          <!-- Card 3: Spatial Blindness & Forced Guessing -->
+          <div class="slide-card p-5 border-t-2 border-t-gold flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="font-mono text-[11px] px-2 py-0.5 rounded bg-amber-950/40 border border-gold/30 text-gold font-bold uppercase">No Coordinates</span>
+                <span class="text-muted text-xs font-mono">Gap 03</span>
+              </div>
+              <h3 class="text-lg font-bold text-bone mb-2">Spatial Blindness &amp; Forced Guesses</h3>
+              <p class="text-xs text-ash leading-relaxed mb-3">
+                <strong class="text-bone">Why it occurs:</strong> Models assign a single label to an entire image without locating damage polygons, and lack an 'uncertain' state to abstain on irrelevant memes or corrupt inputs.
+              </p>
+              <div class="p-2.5 rounded bg-basalt border border-gold/20 font-mono text-[11px] text-amber-300">
+                <span class="text-ash block text-[10px] uppercase">Operational Danger:</span>
+                Tactical void: First responders cannot deploy gear without knowing <em>where</em> bridges or levees broke within the visual frame.
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="mt-8 p-4 rounded-xl bg-basalt border border-bone/10 flex items-center justify-between font-mono text-xs">
-          <span class="text-bone"><strong class="text-ember">CORE PRINCIPLE:</strong> In life-critical disaster management, an erroneous forced classification is significantly more costly than an explicit abstention.</span>
-          <span class="text-muted hidden sm:inline">Gupta &amp; Roy (2024, 2025)</span>
+        <!-- Bottom Principle & Solution Bridge -->
+        <div class="p-4 rounded-xl bg-basalt border border-bone/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-mono text-xs">
+          <div class="flex items-center gap-2.5">
+            <span class="text-ember text-base">⚖️</span>
+            <span><strong class="text-ember">CORE AXIOM:</strong> In life-critical disaster management, an erroneous forced classification is significantly more costly than an explicit abstention.</span>
+          </div>
+          <span class="text-ash bg-white/5 px-2.5 py-1 rounded border border-bone/10 shrink-0 text-[11px]">
+            Gupta &amp; Roy (2024, 2025)
+          </span>
         </div>
       </div>
     </section>
