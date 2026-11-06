@@ -191,6 +191,24 @@ def presentation_page():
     return send_from_directory("docs", "disasterres_net_presentation.html")
 
 
+@app.route("/presentation/pictorial")
+@app.route("/presentation-pictorial")
+def presentation_pictorial_page():
+    return send_from_directory("docs", "disasterres_net_pictorial_presentation.html")
+
+
+@app.route("/hybrid_vision_engine_architecture.jpg")
+def architecture_image():
+    return send_from_directory("docs", "hybrid_vision_engine_architecture.jpg")
+
+
+@app.route("/docs/<path:filename>")
+def docs_assets(filename):
+    return send_from_directory("docs", filename)
+
+
+
+
 @app.route("/healthz")
 def healthz():
     return jsonify({"status": "ok"})
