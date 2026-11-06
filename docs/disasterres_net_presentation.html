@@ -222,7 +222,7 @@
   <!-- MAIN SLIDES DECK -->
   <main class="deck-container">
 
-    <!-- ================= SLIDE 1: Title Slide ================= -->
+<!-- ================= SLIDE 1: Title Slide ================= -->
     <section class="slide active" data-slide="1" data-title="00 · DisasterRes-Net: Title">
       <div class="max-w-5xl">
         <!-- Technical Label -->
@@ -273,10 +273,10 @@
       </div>
     </section>
 
-    <!-- ================= SLIDE 2: Problem Statement ================= -->
+<!-- ================= SLIDE 2: Problem Statement ================= -->
     <section class="slide" data-slide="2" data-title="01 · Introduction &amp; Research Gaps">
       <div class="max-w-5xl">
-        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">01 · INTRODUCTION &amp; RESEARCH GAPS</span>
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">01 · INTRODUCTION &amp; RESEARCH Gaps</span>
         <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-8">
           The Information Bottleneck in Emergency Operations
         </h2>
@@ -314,95 +314,10 @@
       </div>
     </section>
 
-    <!-- ================= SLIDE 3: Dataset & Hygiene Pipeline ================= -->
-    <section class="slide" data-slide="3" data-title="02 · Literature Review &amp; Dataset Hygiene">
+<!-- ================= SLIDE 3: Dual-Engine Architecture ================= -->
+    <section class="slide" data-slide="3" data-title="02 · Proposed Methodology — Dual-Engine Architecture">
       <div class="max-w-5xl">
-        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">02 · LITERATURE REVIEW &amp; DATASET HYGIENE</span>
-        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
-          39,412 Crisis Scenes &amp; Zero-Leakage Hygiene
-        </h2>
-
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-          <!-- Left: Corpus Partition -->
-          <div class="lg:col-span-5 slide-card p-6 flex flex-col justify-between font-mono text-xs">
-            <div>
-              <span class="text-ember uppercase font-bold tracking-wider block mb-2">Stratified 70:30 Partition</span>
-              <h3 class="text-lg font-bold text-bone font-sans mb-4">CrisisMMD &amp; Multi-Hazard Web Stream</h3>
-              <div class="space-y-2">
-                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
-                  <span class="text-ash">Non-Disaster Baseline:</span>
-                  <span class="text-bone font-bold">21,563 (6,471 test)</span>
-                </div>
-                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
-                  <span class="text-ash">Hurricane / Cyclone:</span>
-                  <span class="text-bone font-bold">13,323 (3,997 test)</span>
-                </div>
-                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
-                  <span class="text-ash">Wildfire Burn Scars:</span>
-                  <span class="text-ember font-bold">1,460 (438 test)</span>
-                </div>
-                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
-                  <span class="text-ash">Flood Inundation:</span>
-                  <span class="text-verdigris font-bold">1,303 (391 test)</span>
-                </div>
-                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
-                  <span class="text-ash">Earthquake Debris:</span>
-                  <span class="text-gold font-bold">1,273 (382 test)</span>
-                </div>
-                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
-                  <span class="text-ash">Landslide / Mudflow:</span>
-                  <span class="text-red-400 font-bold">490 (147 test)</span>
-                </div>
-              </div>
-            </div>
-            <div class="mt-4 pt-3 border-t border-bone/10 text-[11px] text-muted flex justify-between">
-              <span>Total: 39,412 scenes</span>
-              <span>Train: 27,586 | Test: 11,826</span>
-            </div>
-          </div>
-
-          <!-- Right: 3 Data Protections -->
-          <div class="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div class="slide-card p-5">
-              <span class="font-mono text-xs text-ember font-bold block mb-2">SHIELD 01</span>
-              <h4 class="font-bold text-bone text-base mb-1">64-Bit dHash Deduplication</h4>
-              <p class="text-xs text-ash leading-relaxed">
-                Social reposts share scene angles. Grayscale 8×9 horizontal gradients generate a 64-bit binary hash. Cross-split pairs with Hamming distance ≤ 4 are purged, preventing visual memorization.
-              </p>
-            </div>
-
-            <div class="slide-card p-5">
-              <span class="font-mono text-xs text-verdigris font-bold block mb-2">SHIELD 02</span>
-              <h4 class="font-bold text-bone text-base mb-1">Blank Banner &amp; Quality Guard</h4>
-              <p class="text-xs text-ash leading-relaxed">
-                Scraped images often include solid-color banners or corrupt headers. An automated filter evaluates RGB standard deviation $\sigma_{\text{rgb}}$; images with $\sigma &lt; 2.0$ are quarantined before GPU passes.
-              </p>
-            </div>
-
-            <div class="slide-card p-5">
-              <span class="font-mono text-xs text-gold font-bold block mb-2">SHIELD 03</span>
-              <h4 class="font-bold text-bone text-base mb-1">Bicubic Standardization</h4>
-              <p class="text-xs text-ash leading-relaxed">
-                Images are standardized to $299 \times 299 \times 3$ with bicubic interpolation, fitting Inception-ResNet-V2 receptive fields. Pixel values are mapped to $[0, 1]$ prior to LMS opponent processing.
-              </p>
-            </div>
-
-            <div class="slide-card p-5">
-              <span class="font-mono text-xs text-violet-400 font-bold block mb-2">SHIELD 04</span>
-              <h4 class="font-bold text-bone text-base mb-1">Zero-Leakage Normalization</h4>
-              <p class="text-xs text-ash leading-relaxed">
-                `StandardScaler` parameters ($\boldsymbol{\mu}, \boldsymbol{\sigma}$) are fitted strictly within training folds during cross-validation, guaranteeing zero leakage of test distributions.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ================= SLIDE 4: Dual-Engine Architecture ================= -->
-    <section class="slide" data-slide="4" data-title="03 · Proposed Methodology — Dual-Engine Architecture">
-      <div class="max-w-5xl">
-        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">03 · PROPOSED METHODOLOGY — DUAL-ENGINE ARCHITECTURE</span>
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">02 · PROPOSED METHODOLOGY — DUAL-ENGINE ARCHITECTURE</span>
         <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-8">
           Two Cores, One Unified Intelligence Desk
         </h2>
@@ -477,10 +392,10 @@
       </div>
     </section>
 
-    <!-- ================= SLIDE 5: 2,036-D Early Feature Fusion Math ================= -->
-    <section class="slide" data-slide="5" data-title="04 · Proposed Methodology — 2,036-D Feature Fusion">
+<!-- ================= SLIDE 4: 2,036-D Early Feature Fusion Math ================= -->
+    <section class="slide" data-slide="4" data-title="03 · Proposed Methodology — 2,036-D Feature Fusion">
       <div class="max-w-5xl">
-        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">04 · PROPOSED METHODOLOGY — 2,036-D FEATURE FUSION</span>
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">03 · PROPOSED METHODOLOGY — 2,036-D FEATURE FUSION</span>
         <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
           Early Feature Fusion: $\mathbf{x}_{\text{fused}} \in \mathbb{R}^{2036}$
         </h2>
@@ -538,10 +453,10 @@
       </div>
     </section>
 
-    <!-- ================= SLIDE 6: Module M2 & DEM-100 Localization ================= -->
-    <section class="slide" data-slide="6" data-title="05 · Proposed Methodology — Spatial Localization">
+<!-- ================= SLIDE 5: Module M2 & DEM-100 Localization ================= -->
+    <section class="slide" data-slide="5" data-title="04 · Proposed Methodology — Spatial Localization">
       <div class="max-w-5xl">
-        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">05 · PROPOSED METHODOLOGY — SPATIAL LOCALIZATION (M2)</span>
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">04 · PROPOSED METHODOLOGY — SPATIAL LOCALIZATION (M2)</span>
         <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
           Module M2: Damage Localization &amp; Continuous DEM Score
         </h2>
@@ -622,10 +537,10 @@
       </div>
     </section>
 
-    <!-- ================= SLIDE 7: Multi-Task Heads & Safety Gating ================= -->
-    <section class="slide" data-slide="7" data-title="06 · Proposed Methodology — Multi-Task &amp; Calibration">
+<!-- ================= SLIDE 6: Multi-Task Heads & Safety Gating ================= -->
+    <section class="slide" data-slide="6" data-title="05 · Proposed Methodology — Multi-Task &amp; Calibration">
       <div class="max-w-5xl">
-        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">06 · PROPOSED METHODOLOGY — MULTI-TASK &amp; CALIBRATION</span>
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">05 · PROPOSED METHODOLOGY — MULTI-TASK &amp; CALIBRATION</span>
         <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
           Three Dedicated Objectives &amp; Safety Abstention
         </h2>
@@ -708,10 +623,10 @@
       </div>
     </section>
 
-    <!-- ================= SLIDE 8: Autonomous Multi-Agent Operational Workflow ================= -->
-    <section class="slide" data-slide="8" data-title="07 · Autonomous Multi-Agent Incident Desk">
+<!-- ================= SLIDE 7: Autonomous Multi-Agent Operational Workflow ================= -->
+    <section class="slide" data-slide="7" data-title="06 · Autonomous Multi-Agent Incident Desk">
       <div class="max-w-5xl">
-        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">07 · MULTI-AGENT INCIDENT DESK &amp; CREW ORCHESTRATION</span>
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">06 · MULTI-AGENT INCIDENT DESK &amp; CREW ORCHESTRATION</span>
         <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
           Crew Orchestration &amp; Hallucination-Defense Lifecycle
         </h2>
@@ -776,7 +691,92 @@
       </div>
     </section>
 
-    <!-- ================= SLIDE 9: Empirical Results & Minority Recall Breakthrough ================= -->
+<!-- ================= SLIDE 8: Dataset & Hygiene Pipeline ================= -->
+    <section class="slide" data-slide="8" data-title="07 · Dataset &amp; Zero-Leakage Hygiene">
+      <div class="max-w-5xl">
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">07 · DATASET &amp; ZERO-LEAKAGE HYGIENE</span>
+        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-6">
+          39,412 Crisis Scenes &amp; Zero-Leakage Hygiene
+        </h2>
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+          <!-- Left: Corpus Partition -->
+          <div class="lg:col-span-5 slide-card p-6 flex flex-col justify-between font-mono text-xs">
+            <div>
+              <span class="text-ember uppercase font-bold tracking-wider block mb-2">Stratified 70:30 Partition</span>
+              <h3 class="text-lg font-bold text-bone font-sans mb-4">CrisisMMD &amp; Multi-Hazard Web Stream</h3>
+              <div class="space-y-2">
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Non-Disaster Baseline:</span>
+                  <span class="text-bone font-bold">21,563 (6,471 test)</span>
+                </div>
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Hurricane / Cyclone:</span>
+                  <span class="text-bone font-bold">13,323 (3,997 test)</span>
+                </div>
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Wildfire Burn Scars:</span>
+                  <span class="text-ember font-bold">1,460 (438 test)</span>
+                </div>
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Flood Inundation:</span>
+                  <span class="text-verdigris font-bold">1,303 (391 test)</span>
+                </div>
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Earthquake Debris:</span>
+                  <span class="text-gold font-bold">1,273 (382 test)</span>
+                </div>
+                <div class="flex justify-between p-2 rounded bg-basalt border border-bone/5">
+                  <span class="text-ash">Landslide / Mudflow:</span>
+                  <span class="text-red-400 font-bold">490 (147 test)</span>
+                </div>
+              </div>
+            </div>
+            <div class="mt-4 pt-3 border-t border-bone/10 text-[11px] text-muted flex justify-between">
+              <span>Total: 39,412 scenes</span>
+              <span>Train: 27,586 | Test: 11,826</span>
+            </div>
+          </div>
+
+          <!-- Right: 3 Data Protections -->
+          <div class="lg:col-span-7 grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div class="slide-card p-5">
+              <span class="font-mono text-xs text-ember font-bold block mb-2">SHIELD 01</span>
+              <h4 class="font-bold text-bone text-base mb-1">64-Bit dHash Deduplication</h4>
+              <p class="text-xs text-ash leading-relaxed">
+                Social reposts share scene angles. Grayscale 8×9 horizontal gradients generate a 64-bit binary hash. Cross-split pairs with Hamming distance ≤ 4 are purged, preventing visual memorization.
+              </p>
+            </div>
+
+            <div class="slide-card p-5">
+              <span class="font-mono text-xs text-verdigris font-bold block mb-2">SHIELD 02</span>
+              <h4 class="font-bold text-bone text-base mb-1">Blank Banner &amp; Quality Guard</h4>
+              <p class="text-xs text-ash leading-relaxed">
+                Scraped images often include solid-color banners or corrupt headers. An automated filter evaluates RGB standard deviation $\sigma_{\text{rgb}}$; images with $\sigma &lt; 2.0$ are quarantined before GPU passes.
+              </p>
+            </div>
+
+            <div class="slide-card p-5">
+              <span class="font-mono text-xs text-gold font-bold block mb-2">SHIELD 03</span>
+              <h4 class="font-bold text-bone text-base mb-1">Bicubic Standardization</h4>
+              <p class="text-xs text-ash leading-relaxed">
+                Images are standardized to $299 \times 299 \times 3$ with bicubic interpolation, fitting Inception-ResNet-V2 receptive fields. Pixel values are mapped to $[0, 1]$ prior to LMS opponent processing.
+              </p>
+            </div>
+
+            <div class="slide-card p-5">
+              <span class="font-mono text-xs text-violet-400 font-bold block mb-2">SHIELD 04</span>
+              <h4 class="font-bold text-bone text-base mb-1">Zero-Leakage Normalization</h4>
+              <p class="text-xs text-ash leading-relaxed">
+                `StandardScaler` parameters ($\boldsymbol{\mu}, \boldsymbol{\sigma}$) are fitted strictly within training folds during cross-validation, guaranteeing zero leakage of test distributions.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+<!-- ================= SLIDE 9: Empirical Results & Minority Recall Breakthrough ================= -->
     <section class="slide" data-slide="9" data-title="08 · Performance Markers &amp; Empirical Results">
       <div class="max-w-5xl">
         <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">08 · PERFORMANCE MARKERS &amp; EMPIRICAL RESULTS</span>
@@ -873,7 +873,7 @@
       </div>
     </section>
 
-    <!-- ================= SLIDE 10: Feature Ablation & CV Stability ================= -->
+<!-- ================= SLIDE 10: Feature Ablation & CV Stability ================= -->
     <section class="slide" data-slide="10" data-title="09 · Discussion &amp; Feature Ablation">
       <div class="max-w-5xl">
         <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">09 · DISCUSSION &amp; SCIENTIFIC ABLATION</span>
@@ -983,7 +983,7 @@
       </div>
     </section>
 
-    <!-- ================= SLIDE 11: Deployment Horizons & Next Frontiers ================= -->
+<!-- ================= SLIDE 11: Deployment Horizons & Next Frontiers ================= -->
     <section class="slide" data-slide="11" data-title="10 · Operational Horizons &amp; Future Frontiers">
       <div class="max-w-5xl">
         <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">10 · OPERATIONAL HORIZONS &amp; FUTURE FRONTIERS</span>
@@ -1029,7 +1029,7 @@
       </div>
     </section>
 
-    <!-- ================= SLIDE 12: Conclusion & Summary ================= -->
+<!-- ================= SLIDE 12: Conclusion & Summary ================= -->
     <section class="slide" data-slide="12" data-title="11 · Conclusion &amp; Research Impact">
       <div class="max-w-5xl">
         <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">11 · CONCLUSION &amp; RESEARCH IMPACT</span>
@@ -1093,7 +1093,7 @@
       </div>
     </section>
 
-    <!-- ================= SLIDE 13: References ================= -->
+<!-- ================= SLIDE 13: References ================= -->
     <section class="slide" data-slide="13" data-title="12 · References &amp; Canonical Literature">
       <div class="max-w-5xl">
         <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">12 · REFERENCES &amp; CANONICAL LITERATURE</span>
