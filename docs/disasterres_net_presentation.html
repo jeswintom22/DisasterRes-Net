@@ -359,79 +359,110 @@
       </div>
     </section>
 
-<!-- ================= SLIDE 3: Dual-Engine Architecture ================= -->
+    <!-- ================= SLIDE 3: Dual-Engine Architecture ================= -->
     <section class="slide" data-slide="3" data-title="02 · Proposed Methodology — Dual-Engine Architecture">
       <div class="max-w-5xl">
-        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-2">02 · PROPOSED METHODOLOGY — DUAL-ENGINE ARCHITECTURE</span>
-        <h2 class="text-4xl sm:text-5xl font-extrabold text-bone tracking-tight mb-8">
+        <!-- Badge -->
+        <span class="font-mono text-xs text-ember-soft tracking-widest uppercase block mb-1">02 · PROPOSED METHODOLOGY — DUAL-ENGINE ARCHITECTURE</span>
+        
+        <!-- Main Heading -->
+        <h2 class="text-3xl sm:text-4xl lg:text-5xl font-extrabold text-bone tracking-tight mb-2">
           Two Cores, One Unified Intelligence Desk
         </h2>
+        
+        <!-- Descriptive Subtitle -->
+        <p class="text-xs sm:text-sm text-ash max-w-4xl leading-relaxed mb-6 font-normal">
+          <strong class="text-bone">Why two engines?</strong> Pure vision models produce raw metrics without situational awareness, while generative LLMs hallucinate casualty statistics. DisasterRes-Net separates <strong class="text-ember-soft">deterministic pixel truth</strong> from <strong class="text-verdigris">autonomous multi-agent reasoning</strong> into a unified, life-critical triage desk:
+        </p>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 items-stretch">
-          <!-- Engine A -->
-          <div class="slide-card-accent p-7 flex flex-col justify-between">
+        <!-- Two Core Engine Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch mb-5">
+          <!-- Engine A: Deterministic Computer Vision Core -->
+          <div class="slide-card-accent p-6 flex flex-col justify-between">
             <div>
-              <div class="flex items-center justify-between mb-4 font-mono text-xs">
+              <div class="flex items-center justify-between mb-3 font-mono text-xs">
                 <span class="px-2.5 py-1 rounded bg-ember/20 text-ember font-bold">ENGINE A</span>
-                <span class="text-ash uppercase">Deterministic Vision Core</span>
+                <span class="text-ember-soft text-[11px] font-semibold tracking-wider uppercase">Deterministic Vision Core</span>
               </div>
-              <h3 class="text-2xl font-bold text-bone mb-4 font-sans">Hybrid Multimodal Pipeline (2,036-D)</h3>
-              <ul class="space-y-3 font-mono text-xs text-ash">
-                <li class="flex items-start gap-2.5">
+              <h3 class="text-xl font-bold text-bone mb-1 font-sans">2,036-D Multimodal Feature Pipeline</h3>
+              <p class="text-[11px] text-ash font-mono mb-4">Pixel-level mathematical truth with zero generative hallucination</p>
+              
+              <ul class="space-y-2.5 font-mono text-xs text-ash">
+                <li class="flex items-start gap-2">
                   <span class="text-ember font-bold">▹</span>
-                  <span><strong class="text-bone">Neuro-Inspired LMS Saliency:</strong> Color opponent pyramids isolate high-frequency rubble anomalies.</span>
+                  <span><strong class="text-bone">Dual-Stream Deep Embeddings:</strong> 1,000-D raw RGB + 1,000-D LMS cone color-opponent saliency attention via Inception-ResNet-V2.</span>
                 </li>
-                <li class="flex items-start gap-2.5">
+                <li class="flex items-start gap-2">
                   <span class="text-ember font-bold">▹</span>
-                  <span><strong class="text-bone">Dual Inception-ResNet-V2:</strong> 1,000-D raw RGB + 1,000-D attention deep embeddings.</span>
+                  <span><strong class="text-bone">Handcrafted Texture Math:</strong> 20-D GLCM Haralick + 16-D uniform LBP capturing rubble roughness, water sheen, and ash textures.</span>
                 </li>
-                <li class="flex items-start gap-2.5">
+                <li class="flex items-start gap-2">
                   <span class="text-ember font-bold">▹</span>
-                  <span><strong class="text-bone">Texture Descriptors (GLCM + LBP):</strong> 36-D surface roughness, water sheen, and rubble moments.</span>
+                  <span><strong class="text-bone">In-Fold Probability Calibration:</strong> 5-fold OOF multipliers &amp; temperature scaling ($T=0.427$) eliminating overconfident false certainty.</span>
                 </li>
-                <li class="flex items-start gap-2.5">
+                <li class="flex items-start gap-2">
                   <span class="text-ember font-bold">▹</span>
-                  <span><strong class="text-bone">Module M2 Spatial Localization:</strong> Otsu binarization, connected components, continuous DEM (0–100).</span>
+                  <span><strong class="text-bone">Module M2 Spatial Quantification:</strong> Adaptive Otsu binarization and connected components generating DEM (0–100) &amp; DDM masks.</span>
                 </li>
               </ul>
             </div>
-            <div class="mt-6 pt-4 border-t border-bone/10 font-mono text-xs text-ember-soft flex justify-between">
-              <span>Output: Multi-Task Probs + DDM Mask</span>
-              <span class="text-bone">&lt; 380ms Latency</span>
+            
+            <div class="mt-5 pt-3.5 border-t border-bone/10 font-mono text-[11px] text-ember-soft flex items-center justify-between">
+              <span>Outputs: 6 Perils · 3 Severities · DEM 0–100 · DDM Masks</span>
+              <span class="text-bone font-bold bg-ember/10 px-2 py-0.5 rounded border border-ember/20">&lt; 380ms Latency</span>
             </div>
           </div>
 
-          <!-- Engine B -->
-          <div class="slide-card p-7 flex flex-col justify-between">
+          <!-- Engine B: Autonomous Multi-Agent Desk -->
+          <div class="slide-card p-6 flex flex-col justify-between">
             <div>
-              <div class="flex items-center justify-between mb-4 font-mono text-xs">
+              <div class="flex items-center justify-between mb-3 font-mono text-xs">
                 <span class="px-2.5 py-1 rounded bg-verdigris/20 text-verdigris font-bold">ENGINE B</span>
-                <span class="text-ash uppercase">Autonomous Agent Crew</span>
+                <span class="text-verdigris text-[11px] font-semibold tracking-wider uppercase">Autonomous Agent Crew</span>
               </div>
-              <h3 class="text-2xl font-bold text-bone mb-4 font-sans">CrewAI Multi-Agent Coordinator</h3>
-              <ul class="space-y-3 font-mono text-xs text-ash">
-                <li class="flex items-start gap-2.5">
+              <h3 class="text-xl font-bold text-bone mb-1 font-sans">CrewAI Multi-Agent Coordinator</h3>
+              <p class="text-[11px] text-ash font-mono mb-4">Contextual grounding, live API polling, and anti-hallucination defense</p>
+              
+              <ul class="space-y-2.5 font-mono text-xs text-ash">
+                <li class="flex items-start gap-2">
                   <span class="text-verdigris font-bold">▹</span>
-                  <span><strong class="text-bone">Intelligence Scout:</strong> Interrogates live GDACS feeds, ReliefWeb event archives, and geocoding.</span>
+                  <span><strong class="text-bone">Toponym &amp; Temporal Resolver:</strong> Disambiguates geographic aliases, preserves conversational memory, and detects month/year mismatches.</span>
                 </li>
-                <li class="flex items-start gap-2.5">
+                <li class="flex items-start gap-2">
                   <span class="text-verdigris font-bold">▹</span>
-                  <span><strong class="text-bone">Evidence Harvester:</strong> Multi-tiered web imagery scraper with dynamic query composition.</span>
+                  <span><strong class="text-bone">Live Event Scout:</strong> Interrogates authoritative UN OCHA ReliefWeb and GDACS APIs for official alert tiers and bounding coordinates.</span>
                 </li>
-                <li class="flex items-start gap-2.5">
+                <li class="flex items-start gap-2">
                   <span class="text-verdigris font-bold">▹</span>
-                  <span><strong class="text-bone">Incident Commander:</strong> Evaluates peril-severity matrices and compiles tactical emergency actions.</span>
+                  <span><strong class="text-bone">Overhead Evidence Harvester:</strong> Queries Serper.dev for multi-vendor satellite/aerial feeds with dynamic query formulation and quality screening.</span>
                 </li>
-                <li class="flex items-start gap-2.5">
+                <li class="flex items-start gap-2">
                   <span class="text-verdigris font-bold">▹</span>
-                  <span><strong class="text-bone">Numeric Fidelity Gate:</strong> Deterministic regex validator auditing reports against ground-truth facts.</span>
+                  <span><strong class="text-bone">Numeric Fidelity Gate:</strong> Deterministic regex validator audits generated report text against verified facts with zero hallucination tolerance.</span>
                 </li>
               </ul>
             </div>
-            <div class="mt-6 pt-4 border-t border-bone/10 font-mono text-xs text-verdigris flex justify-between">
-              <span>Output: Calibrated Situation Report (SITREP)</span>
-              <span class="text-bone">SSE Streaming</span>
+            
+            <div class="mt-5 pt-3.5 border-t border-bone/10 font-mono text-[11px] text-verdigris flex items-center justify-between">
+              <span>Outputs: Georeferenced SITREP · Tactical Action Plans</span>
+              <span class="text-bone font-bold bg-verdigris/10 px-2 py-0.5 rounded border border-verdigris/20">SSE Streaming &lt; 60s</span>
             </div>
+          </div>
+        </div>
+
+        <!-- Unified Operational Pipeline Flow (Bottom) -->
+        <div class="p-3.5 rounded-xl bg-basalt border border-bone/10 font-mono text-[11px] flex flex-wrap items-center justify-between gap-2">
+          <span class="text-muted uppercase tracking-wider text-[10px]">End-to-End Synergy Flow:</span>
+          <div class="flex flex-wrap items-center gap-1.5 text-ash">
+            <span class="px-2 py-0.5 rounded bg-white/5 text-bone">User Query</span>
+            <span class="text-ember">➔</span>
+            <span class="px-2 py-0.5 rounded bg-verdigris/10 text-verdigris">Resolver + GDACS Scout</span>
+            <span class="text-ember">➔</span>
+            <span class="px-2 py-0.5 rounded bg-ember/10 text-ember-soft">Engine A (2,036-D &amp; DEM)</span>
+            <span class="text-ember">➔</span>
+            <span class="px-2 py-0.5 rounded bg-red-950/40 text-red-300">Numeric Fidelity Gate</span>
+            <span class="text-ember">➔</span>
+            <span class="px-2 py-0.5 rounded bg-gold/10 text-gold">Commander SITREP</span>
           </div>
         </div>
       </div>
